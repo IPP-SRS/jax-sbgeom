@@ -176,11 +176,6 @@ def _generate_vertices_from_finite_sized_lines(finite_size_lines : jnp.ndarray, 
         #     points_on_surface[3] * jnp.flip(radial_grid * toroidal_grid, axis=0)[..., None] + 
         #     points_on_surface[2] * jnp.flip(radial_grid * toroidal_grid, axis=1)[..., None] + 
         #     points_on_surface[0] * (radial_grid * toroidal_grid)[..., None])
-        
-        if i == 0:
-            # print(vertices[0])
-            # print(vertices_v2[0])
-            pass
     
     return vertices
 
