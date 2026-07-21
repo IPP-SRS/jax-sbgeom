@@ -222,7 +222,35 @@ def _build_hexahedrals_from_vertices(n_samples : int, n_grid : int):
     return connectivity.reshape(-1, 8)
 
 
-def mesh_coil_volumetric(coil : FiniteSizeCoil, n_s : int, n_grid : int, width_radial : float, width_phi : float):
+def refine_longitudinal_mesh(finite_size_lines, refinement_array : jnp.ndarray):
+    # AI written - probably needs refactoring. But first the question is if we really need this...
+    # We want to refine the mesh in the longitudinal direction according to the provided refinement array
+    # The refinement array should have a length equal to n_longitudinal and values between 0 and 1, where 0 means no refinement and 1 means maximum refinement (doubling the number of points)
+    # We can achieve this by generating additional points between the original points according to the refinement array
+
+    # Generate refined finite sized lines
+    refined_finite_size_lines = []
+    for i in range(n_longitudinal):
+        refined_finite_size_lines.append(finite_size_lines[i])
+        if refinement_array[i] > 0:
+            # Generate additional point between this point and the next point
+            next_i = (i + 1) % n_longitudinal
+            additional_point = (finite_size_lines[i] + finite_size_lines[next_i]) / 2
+            refined_finite_size_lines.append(additional_point)
+
+    finite_size_lines = jnp.array(refined_finite_size_lines)
+    n_longitudinal = finite_size_lines.shape[0]
+    return finite_size_lines, n_longitudinal
+
+
+def mesh_coil_volumetric(coil : FiniteSizeCoil, 
+                         n_longitudinal : int, 
+                         n_grid : int, 
+                         width_radial : float, 
+                         width_phi : float,
+                         n_radial: int = None,
+                         n_toroidal: int = None,
+                         longitudinal_refinement: jnp.ndarray = None):
     '''
     Mesh the volume of a coil using a defined number of samples and coil width.
 
@@ -230,7 +258,7 @@ def mesh_coil_volumetric(coil : FiniteSizeCoil, n_s : int, n_grid : int, width_r
     ----------
     coil : Coil
         Coil to mesh
-    n_s : int
+    n_longitudinal : int
         Number of samples along the coil
     n_grid : int
         Number of grid points in the radial and toroidal directions
@@ -245,7 +273,102 @@ def mesh_coil_volumetric(coil : FiniteSizeCoil, n_s : int, n_grid : int, width_r
     jnp.ndarray
         Connectivity array of the meshed coil volume (tetrahedra)
     '''
-    finite_size_lines = coil.finite_size(jnp.linspace(0, 1.0, n_s, endpoint=False), width_radial, width_phi)     
+    finite_size_lines = coil.finite_size(jnp.linspace(0, 1.0, n_longitudinal, endpoint=False), width_radial, width_phi)
+
+    if longitudinal_refinement is not None:
+        finite_size_lines, n_longitudinal = refine_longitudinal_mesh(finite_size_lines, longitudinal_refinement)
+    
     vertices = _generate_vertices_from_finite_sized_lines(finite_size_lines, n_grid)
-    connectivity = _build_hexahedrals_from_vertices(n_s, n_grid)
+    connectivity = _build_hexahedrals_from_vertices(n_longitudinal, n_grid)
     return vertices.reshape(-1, 3), connectivity
+
+
+def _find_closest_lines_to_point(lines, ref_point, n_closest=2, take_mean='True'):
+    """
+    Given a list of densely-sampled lines (each an [n, 3] array of points)
+    and a reference point (shape [3]), return the indices of the
+    `n_closest` lines that lie nearest to the point on average.
+
+    Parameters
+    ----------
+    lines : array-like, shape [grid, n_lines, 3]
+    point : array-like, shape [3]
+    n_closest : int, number of closest lines to return (default 2)
+    take_mean : bool, decide if the average disatnce should be taken into account, 
+    local minimum if false (default True)
+    """
+    ref_point = jnp.asarray(ref_point, dtype=float)
+
+    # distance from every point on every line to the reference point
+    point_distances = jnp.linalg.norm(
+        lines - ref_point[None, None, :], axis=-1
+    )  # [grid, n_lines]
+
+    if take_mean:
+        # average distance of each line to the reference point
+        distances = point_distances.mean(axis=0)  # [n_lines]
+    else:
+        # closest distance of each line to the reference point
+        distances = point_distances.min(axis=0)  # [n_lines]
+
+    order = jnp.argsort(distances)[:n_closest]
+
+    closest_indices = order.tolist()
+    closest_distances = distances[order].tolist()
+
+    return closest_indices, closest_distances
+
+
+def intercoil_lines (coil1: FiniteSizeCoil, 
+                              coil2: FiniteSizeCoil,
+                              n_longitudinal : int,
+                              coil_width_radial: float,
+                              coil_width_phi : float,):
+    '''
+    Mesh the volume between two coils using a defined number of samples and coil width.
+
+    TODO: Take into account diffrent widths for the two coils, and different number of samples for the two coils.
+
+    Parameters
+    ----------
+    coil1 : FiniteSizeCoil
+        First coil
+    coil2 : FiniteSizeCoil
+        Second coil
+    n_longitudinal : int
+        Number of samples along the coil
+    n_grid : int
+        Number of grid points in the toroidal direction
+    width_radial : float
+        Radial width of the finite sized coil
+    width_phi : float
+        Toroidal width of the finite sized coil
+
+    Returns
+    -------
+    jnp.ndarray
+        Vertices of the meshed inter-coil volume
+    jnp.ndarray
+        Connectivity array of the meshed inter-coil volume (tetrahedra)
+    '''
+
+    finite_size_lines_1 = coil1.finite_size(jnp.linspace(0, 1.0, n_longitudinal, endpoint=False), coil_width_radial, coil_width_phi)
+    finite_size_lines_2 = coil2.finite_size(jnp.linspace(0, 1.0, n_longitudinal, endpoint=False), coil_width_radial, coil_width_phi)
+
+    # Find the closest lines to the midpoint between the two coils (inner corners between the two coils)
+    idx1, _ = _find_closest_lines_to_point(finite_size_lines_1, (coil1.centre() + coil2.centre()) / 2, n_closest=1)
+    idx2, _ = _find_closest_lines_to_point(finite_size_lines_2, (coil1.centre() + coil2.centre()) / 2, n_closest=1)
+
+    # The above function returns lists of indices, but we want it as int
+    idx1 = idx1[0]
+    idx2 = idx2[0]
+
+    # This should work as long as the coils have the same order of the lines (which they should have)
+    finite_size_lines = jnp.stack([
+        finite_size_lines_1[:, idx1, :],
+        finite_size_lines_2[:, idx2, :],
+        finite_size_lines_1[:, (idx2+2)%4, :],
+        finite_size_lines_2[:, (idx1+2)%4, :],
+    ], axis=1)  # shape [n_longitudinal, 4, 3]
+
+    return finite_size_lines
