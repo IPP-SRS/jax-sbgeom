@@ -319,7 +319,76 @@ def _find_closest_lines_to_point(lines, ref_point, n_closest=2, take_mean='True'
     return closest_indices, closest_distances
 
 
-def intercoil_lines (coil1: FiniteSizeCoil, 
+def _curve_distance(line1, line2, symmetric=True):
+    """
+    Average distance between two possibly non-uniformly sampled curves.
+
+    For each point on line1, the distance to its nearest point on line2 is taken
+    (and vice versa if symmetric), then averaged. This avoids assuming that index
+    i on one curve is spatially close to index i on the other, which breaks when
+    the two curves have different point densities along their length.
+
+    Parameters
+    ----------
+    line1 : jnp.ndarray [n1, 3]
+    line2 : jnp.ndarray [n2, 3]
+    symmetric : bool
+        If True, average nearest-neighbour distances in both directions
+        (line1->line2 and line2->line1). If False, only line1->line2.
+
+    Returns
+    -------
+    float
+        Average distance between the two curves
+    """
+    pairwise = jnp.linalg.norm(line1[:, None, :] - line2[None, :, :], axis=-1)  # [n1, n2]
+    dist_1_to_2 = pairwise.min(axis=1).mean()
+    if not symmetric:
+        return dist_1_to_2
+    dist_2_to_1 = pairwise.min(axis=0).mean()
+    return (dist_1_to_2 + dist_2_to_1) / 2
+
+
+def _find_facing_face(lines_self, centerline_other):
+    """
+    Find which face (pair of adjacent corner lines) of a coil's cross-section
+    faces another coil.
+
+    Faces are compared by distance to the other coil's centerline (rather than
+    to a single proxy point), so the result does not depend on the two coils'
+    lines being ordered consistently, and a face pointing towards the coil's
+    own centre will not be picked over the face that actually faces the
+    neighbouring coil.
+
+    Parameters
+    ----------
+    lines_self : jnp.ndarray [n_samples, 4, 3]
+        Finite sized lines of the coil to select a face on
+    centerline_other : jnp.ndarray [n_samples_other, 3]
+        Centerline (coil.position) of the neighbouring coil
+
+    Returns
+    -------
+    tuple(int, int)
+        Indices of the two adjacent corner lines bounding the facing face
+    """
+    # perimeter order of corners, matching the bilinear quad convention used in
+    # _generate_vertices_from_finite_sized_lines (0-3-2-1-0)
+    face_corner_pairs = [(0, 3), (3, 2), (2, 1), (1, 0)]
+
+    best_face = None
+    best_dist = jnp.inf
+    for a, b in face_corner_pairs:
+        face_centerline = (lines_self[:, a, :] + lines_self[:, b, :]) / 2  # [n_samples, 3]
+        dist = _curve_distance(face_centerline, centerline_other)
+        if dist < best_dist:
+            best_dist = dist
+            best_face = (a, b)
+
+    return best_face
+
+
+def intercoil_lines (coil1: FiniteSizeCoil,
                               coil2: FiniteSizeCoil,
                               n_longitudinal : int,
                               coil_width_radial: float,
@@ -352,23 +421,32 @@ def intercoil_lines (coil1: FiniteSizeCoil,
         Connectivity array of the meshed inter-coil volume (tetrahedra)
     '''
 
-    finite_size_lines_1 = coil1.finite_size(jnp.linspace(0, 1.0, n_longitudinal, endpoint=False), coil_width_radial, coil_width_phi)
-    finite_size_lines_2 = coil2.finite_size(jnp.linspace(0, 1.0, n_longitudinal, endpoint=False), coil_width_radial, coil_width_phi)
+    s = jnp.linspace(0, 1.0, n_longitudinal, endpoint=False)
+    finite_size_lines_1 = coil1.finite_size(s, coil_width_radial, coil_width_phi)
+    finite_size_lines_2 = coil2.finite_size(s, coil_width_radial, coil_width_phi)
 
-    # Find the closest lines to the midpoint between the two coils (inner corners between the two coils)
-    idx1, _ = _find_closest_lines_to_point(finite_size_lines_1, (coil1.centre() + coil2.centre()) / 2, n_closest=1)
-    idx2, _ = _find_closest_lines_to_point(finite_size_lines_2, (coil1.centre() + coil2.centre()) / 2, n_closest=1)
+    # Find the face of each coil that faces the other coil, judged by distance
+    # to the other coil's centerline (not a single midpoint proxy), so no
+    # assumption about matching line order between the coils is needed.
+    a1, b1 = _find_facing_face(finite_size_lines_1, coil2.position(s))
+    a2, b2 = _find_facing_face(finite_size_lines_2, coil1.position(s))
 
-    # The above function returns lists of indices, but we want it as int
-    idx1 = idx1[0]
-    idx2 = idx2[0]
+    # Match orientation: classify each face's two corners as inward/outward
+    # relative to their own coil's centre (inward = shorter distance to centre),
+    # then pair inward-with-inward and outward-with-outward so the resulting
+    # quad connecting the two faces isn't twisted.
+    a1_is_inward = jnp.linalg.norm(finite_size_lines_1[:, a1, :] - coil1.centre()[None, :], axis=-1).mean() < \
+                   jnp.linalg.norm(finite_size_lines_1[:, b1, :] - coil1.centre()[None, :], axis=-1).mean()
+    a2_is_inward = jnp.linalg.norm(finite_size_lines_2[:, a2, :] - coil2.centre()[None, :], axis=-1).mean() < \
+                   jnp.linalg.norm(finite_size_lines_2[:, b2, :] - coil2.centre()[None, :], axis=-1).mean()
+    if a1_is_inward != a2_is_inward:
+        a2, b2 = b2, a2
 
-    # This should work as long as the coils have the same order of the lines (which they should have)
     finite_size_lines = jnp.stack([
-        finite_size_lines_1[:, idx1, :],
-        finite_size_lines_2[:, idx2, :],
-        finite_size_lines_1[:, (idx2+2)%4, :],
-        finite_size_lines_2[:, (idx1+2)%4, :],
+        finite_size_lines_1[:, a1, :],
+        finite_size_lines_2[:, a2, :],
+        finite_size_lines_1[:, b1, :],
+        finite_size_lines_2[:, b2, :],
     ], axis=1)  # shape [n_longitudinal, 4, 3]
 
     return finite_size_lines
