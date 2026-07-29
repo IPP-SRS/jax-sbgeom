@@ -7,7 +7,7 @@ import jax
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # uniform interpolation
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def interpolate_fractions(s, nsurf):    
+def interpolate_fractions(s, nsurf):
     '''
     Interpolate fractions for uniform sampling
 
@@ -27,9 +27,17 @@ def interpolate_fractions(s, nsurf):
         Fraction between i0 and i1
     '''
     s_start =  s * (nsurf-1)
-    i0      = jnp.floor(s_start).astype(int)
-    i1      = jnp.minimum(i0 + 1, nsurf - 1)    
-    ds      = s_start - i0    
+    # Guard against floating-point noise pushing s_start just below an intended
+    # integer boundary (e.g. 57.999996 instead of 58.0) -- this happens whenever s
+    # is constructed to land exactly on a grid point, e.g. via
+    # jnp.linspace(0, 1, nsurf, endpoint=False), and floor() would otherwise
+    # silently select the wrong (previous) index. The tolerance scales with the
+    # dtype's precision and nsurf, since the absolute error in s*nsurf grows with
+    # the magnitude of the result.
+    tol     = 8 * jnp.finfo(s_start.dtype).eps * nsurf
+    i0      = jnp.floor(s_start + tol).astype(int)
+    i1      = jnp.minimum(i0 + 1, nsurf - 1)
+    ds      = jnp.clip(s_start - i0, 0.0, 1.0)
     return i0, i1, ds
 
 def interpolate_array(x_interp, s):
@@ -53,7 +61,7 @@ def interpolate_array(x_interp, s):
     x1 = x_interp[i1]
     return (1 - ds) * x0 + ds * x1
 
-def interpolate_fractions_modulo(s, nsurf):    
+def interpolate_fractions_modulo(s, nsurf):
     '''
     Interpolate fractions for uniform sampling with modulo wrapping
     I.e., s=1 maps to index 0 again.
@@ -74,9 +82,15 @@ def interpolate_fractions_modulo(s, nsurf):
         Fraction between i0 and i1
     '''
     s_start =  s * nsurf
-    i0      = jnp.floor(s_start).astype(int)
+    # See interpolate_fractions for why the tolerance is needed: s is routinely
+    # constructed to land exactly on a grid point (e.g. jnp.linspace(0, 1, nsurf,
+    # endpoint=False)), and without it floor() can silently select the wrong
+    # (previous) index due to floating-point rounding of s*nsurf just below the
+    # intended integer.
+    tol     = 8 * jnp.finfo(s_start.dtype).eps * nsurf
+    i0      = jnp.floor(s_start + tol).astype(int)
     i1      = i0 + 1
-    ds      = s_start - i0    
+    ds      = jnp.clip(s_start - i0, 0.0, 1.0)
     return i0, i1, ds
 
 def interpolate_array_modulo(x_interp, s):
