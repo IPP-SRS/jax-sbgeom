@@ -35,7 +35,7 @@ dependencies = [
 [project.optional-dependencies]
 viz = ["pyvista"]
 dagmc = ["pydagmc"]
-test = ["pytest", "trimesh", "embreex"]
+test = ["pytest", "trimesh", "embreex", "pyvista"]
 
 [project.urls]
 Homepage = "https://github.com/IPP-SRS/jax-sbgeom"
