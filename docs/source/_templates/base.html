@@ -1,0 +1,24 @@
+{% extends "!base.html" %}
+
+{#- Default to light mode for first-time visitors.
+
+    Furo's own base.html seeds the theme with `localStorage.getItem("theme") ||
+    "auto"`, i.e. it follows the OS colour scheme when no choice has been made.
+    This overrides only that fallback: a visitor who has used the theme toggle
+    still gets their stored preference, and nothing is written to localStorage
+    on their behalf. -#}
+{% block body %}
+<script>
+  document.body.dataset.theme = localStorage.getItem("theme") || "light";
+</script>
+{% endblock %}
+
+{#- Furo renders html_js_files at the end of <body> (after page content), for
+    performance. The plotly notebook outputs embed themselves via requirejs's
+    AMD pattern (an inline `define('plotly', ...)` call sitting in the page
+    content, followed by `require(["plotly"], ...)` calls) -- both need
+    require.js's `define`/`require` globals to already exist by the time they
+    run, so require.js itself has to load in <head>, ahead of the body. -#}
+{% block extrahead %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+{% endblock %}
