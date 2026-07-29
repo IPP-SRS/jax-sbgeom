@@ -200,10 +200,11 @@ def test_generate_vertices_from_finite_sized_lines_bilinear_spacing():
     assert not onp.allclose(mid_row, mid_row[0:1])
 
     # corners should match the given patch orientation
-    assert onp.allclose(onp.asarray(vertices[0, 0, 0]), [-1.0, -1.0, 0.0])
+    # finite_size_lines order is v_0: +radial+phi, v_1: -radial+phi, v_2: -radial-phi, v_3: +radial-phi
+    assert onp.allclose(onp.asarray(vertices[0, 0, 0]), [1.0, 1.0, 0.0])
     assert onp.allclose(onp.asarray(vertices[0, 0, -1]), [1.0, -1.0, 0.0])
     assert onp.allclose(onp.asarray(vertices[0, -1, 0]), [-1.0, 1.0, 0.0])
-    assert onp.allclose(onp.asarray(vertices[0, -1, -1]), [1.0, 1.0, 0.0])
+    assert onp.allclose(onp.asarray(vertices[0, -1, -1]), [-1.0, -1.0, 0.0])
 
 
 @pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
