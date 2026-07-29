@@ -1,0 +1,8 @@
+include README.md
+include LICENSE
+
+prune examples
+prune docs
+prune tests
+prune build
+exclude dagmc.h5m

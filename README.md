@@ -18,7 +18,7 @@ Key features:
 - BVH construction, ray-BVH traversal and shortest distances to mesh for flux surface fitting
 - Spline interpolations
 
-For a showcase of some of these features, see [T.J. Bogaarts and F. Warmer](tbd). Alternatively, the examples reproduce exactly the figures given in the paper.
+For a showcase of some of these features, see T.J. Bogaarts and F. Warmer (paper forthcoming). Alternatively, the examples reproduce exactly the figures given in the paper.
 
 # Installation
 
