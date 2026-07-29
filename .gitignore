@@ -130,8 +130,4 @@ dmypy.json
 *~
 
 *.nc4
-*.h5
-*helias5_coils.npy
-*helias5_input.npy
-*helias4_input.npy
 examples/data/*

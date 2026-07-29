@@ -55,12 +55,12 @@ def check_vector_coilset(coils_jax):
     onp.testing.assert_allclose(centre_base, centre_vec)
     onp.testing.assert_allclose(normal_base, normal_vec)
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_vector_coilset_discrete(data_file):
     coils_jaxsbgeom = _get_all_discrete_coils(data_file)
     check_vector_coilset(coils_jaxsbgeom)   
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_vector_coilset_fourier(data_file):
     coils_jax  = _get_all_fourier_coils(data_file)
     check_vector_coilset(coils_jax)
@@ -122,13 +122,13 @@ def check_finitesize_coilset(coils_jax, frame_class : Type[jsb.coils.base_coil.F
         onp.testing.assert_allclose(finite_size_base, finite_size_vec[i])
 
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy")    )
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 @pytest.mark.parametrize("frame_class", classes_discrete)
 def test_finitesize_coilset_discrete(data_file, frame_class):
     coils_jaxsbgeom = _get_all_discrete_coils(data_file)
     check_finitesize_coilset(coils_jaxsbgeom, frame_class)
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy")    )
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 @pytest.mark.parametrize("frame_class", classes)
 def test_finitesize_coilset_fourier(data_file, frame_class):
     coils_jax = _get_all_fourier_coils(data_file)
@@ -149,14 +149,14 @@ def check_optimization(coilset_jax):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy")    )
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_cws_optimization_discrete(data_file):
    
     coils_jaxsbgeom= _get_all_discrete_coils(data_file)
     check_optimization(coils_jaxsbgeom)
 
 @pytest.mark.slow
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy")    )
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_cws_optimization_fourier(data_file):
     coils_jax = _get_all_fourier_coils(data_file)
     check_optimization(coils_jax)   

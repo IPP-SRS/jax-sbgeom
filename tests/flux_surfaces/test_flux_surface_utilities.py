@@ -53,13 +53,13 @@ def check_cws_ray_tracing(cws_mesh, fs_jax):
     onp.testing.assert_allclose(onp.array(reinterpolated_positions), onp.array(final_points), atol=1e-10)
 
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_cws_ray_tracing(data_file):
     cws_mesh, fs_jax =_get_cws_and_flux_surface(data_file)
     check_cws_ray_tracing(cws_mesh, fs_jax)
     
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_half_to_full_module_conversion(data_file):
     '''
     This test ensures the conversion of full and half module meshes work. It test by

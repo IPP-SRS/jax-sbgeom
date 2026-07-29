@@ -107,26 +107,26 @@ def _get_principal_curvatures_sbgeom(fs_jax, fs_sbgeom, sampling_func_1d):
     curv_sbgeom = return_all_principal_curvatures(*sampling_func_1d(fs_jax, include_axis=False, reverse_theta=fs_sbgeom.du_x_dv_sign() == 1.0))
     return curv_sbgeom.reshape(_sampling_grid(fs_jax, include_axis=False)[0].shape + (2,))
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_position(data_file):    
     fs_jax = _get_flux_surface(data_file)
     pos_jsb = _get_positions_jsb(fs_jax, _sampling_grid)    
     onp.testing.assert_allclose(pos_jsb, onp.load(_data_file_to_data_output(data_file, "_position")), atol=1e-13)
 
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_normal(data_file):    
     fs_jax = _get_flux_surface(data_file)
     pos_jsb = _get_normals_jsb(fs_jax, _sampling_grid)    
     onp.testing.assert_allclose(pos_jsb, onp.load(_data_file_to_data_output(data_file, "_normal")), atol=1e-13)
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_principal_curvatures(data_file):
     fs_jax = _get_flux_surface(data_file)
     pos_jsb = _get_principal_curvatures_jsb(fs_jax, _sampling_grid)    
     onp.testing.assert_allclose(pos_jsb, onp.load(_data_file_to_data_output(data_file, "_curvature")), atol=1e-13)
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 @pytest.mark.slow
 def test_vectorization(data_file):
     fs_jax = _get_flux_surface(data_file)
@@ -280,7 +280,7 @@ def _get_watertight_mesh_sbgeom(fs_sbgeom, s_values, phi_end, n_theta=20, n_phi=
     return pos_jsb, mesh[1]    
 
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_meshing_surface_half_mod(data_file):    
     fs_jax = _get_flux_surface(data_file)
     n_theta, n_phi = n_theta_n_phi()
@@ -294,7 +294,7 @@ def test_meshing_surface_half_mod(data_file):
     onp.testing.assert_allclose(pos_jsb, pos_sbgeom, atol=1e-13)
     onp.testing.assert_allclose(tri_jsb, tri_sbgeom, atol=1e-13)
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_meshing_surface_full(data_file):
     fs_jax = _get_flux_surface(data_file)
     n_theta, n_phi = n_theta_n_phi()
@@ -309,7 +309,7 @@ def test_meshing_surface_full(data_file):
     onp.testing.assert_allclose(tri_jsb, tri_sbgeom, atol=1e-13)
 
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_all_closed_surfaces(data_file):    
     fs_jax = _get_flux_surface(data_file)
     surfaces = _get_all_closed_surfaces_jsb(fs_jax)
@@ -347,7 +347,7 @@ def _get_all_cases_sbgeom(fs_sbgeom):
     return onp.concatenate(mesh_pos, axis=0), onp.concatenate(mesh_con, axis=0)
 
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_all_tetrahedral_meshes(data_file):
     fs_jax = _get_flux_surface(data_file)
     s_values, phi_ends = _get_all_tetrahedral_test_cases()
@@ -362,7 +362,7 @@ def test_all_tetrahedral_meshes(data_file):
     onp.testing.assert_allclose(mesh_pos, pos_sbgeom, atol=1e-13, err_msg="Tetrahedral mesh points do not match SBGeom")
     onp.testing.assert_allclose(mesh_conn, conn_sbgeom, err_msg="Tetrahedral mesh connectivity do not match SBGeom")
   
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_watertight_surfaces(data_file):    
     fs_jax = _get_flux_surface(data_file)
 
@@ -391,7 +391,7 @@ def _get_volume_half_mod_jsb(fs_jax, s=0.5357):
 def _get_volume_full_jsb(fs_jax, s=0.5357):
     return jsb.flux_surfaces.flux_surfaces_base._volume_from_fourier(fs_jax, s)
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_volumes(data_file):
     fs_jax = _get_flux_surface(data_file)
     s      = 0.5357    
@@ -405,7 +405,7 @@ def test_volumes(data_file):
 #                                                                          Conversion to Fourier
 # ===================================================================================================================================================================================
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_RZ_to_VMEC_lcfs(data_file):
     fs_jax = _get_flux_surface(data_file)
 

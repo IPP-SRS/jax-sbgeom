@@ -9,7 +9,7 @@ jax.config.update("jax_enable_x64", True)
 from .test_flux_surface_base_data import DATA_INPUT_FLUX_SURFACES
 
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_d_matrix(data_file):
     '''
     This test checks the consistency of the distance matrix interpolation in the FluxSurfaceExtendedDistanceMatrix class. 

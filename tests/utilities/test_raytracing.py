@@ -19,7 +19,7 @@ def _get_flux_surface_jax(data_file):
 
 
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_bvh_probing(data_file):
     fs_jax = _get_flux_surface_jax(data_file)
     N_test = 300
@@ -47,7 +47,7 @@ def test_bvh_probing(data_file):
         onp.testing.assert_allclose(sorted_hits, sorted_original_hits)
 
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_bvh_closest_point(data_file):
 
     fs_jax = _get_flux_surface_jax(data_file)

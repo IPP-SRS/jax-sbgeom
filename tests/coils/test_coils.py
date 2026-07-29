@@ -74,7 +74,7 @@ def _get_tangents(coilset_jsb):
         tangents.append(coilset_jsb[i].tangent(_sampling_s()))
     return onp.array(tangents)
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_discrete_coil_position(data_file):    
     coils = _get_all_discrete_coils(data_file)    
 
@@ -83,14 +83,14 @@ def test_discrete_coil_position(data_file):
     onp.testing.assert_allclose(positions_this, expected_positions, atol=1e-12, rtol=1e-12)
 
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_discrete_coil_position(data_file):    
     coils              = _get_all_discrete_coils(data_file)    
     positions_this      =  _get_tangents(coils)
     expected_positions = onp.load(_data_file_to_data_output(data_file, extra_text="_discrete_coil_tangent"))
     onp.testing.assert_allclose(positions_this, expected_positions, atol=1e-12, rtol=1e-12)
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_fourier_coil_position(data_file):    
     coils = _get_all_fourier_coils(data_file)    
 
@@ -98,7 +98,7 @@ def test_fourier_coil_position(data_file):
     expected_positions = onp.load(_data_file_to_data_output(data_file, extra_text="_fourier_coil_position"))
     onp.testing.assert_allclose(positions_this, expected_positions, atol=1e-12, rtol=1e-12)
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_fourier_coil_tangent(data_file):    
     coils              = _get_all_fourier_coils(data_file)    
     positions_this      =  _get_tangents(coils)
@@ -140,14 +140,14 @@ def _get_all_finite_sizes(coilset_discrete):
     return onp.array(fs_coils)
     
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_discrete_coil_finite_size(data_file):
     coils_discrete = _get_all_discrete_coils(data_file)    
     finitesizes_this =  _get_all_finite_sizes(coils_discrete)
     expected_finitesizes = onp.load(_data_file_to_data_output(data_file, extra_text="_discrete_coil_finite_size"))
     onp.testing.assert_allclose(finitesizes_this, expected_finitesizes, atol=1e-12, rtol=1e-12)
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_fourier_coil_finite_size(data_file):
     coils_fourier = _get_all_fourier_coils(data_file)    
     finitesizes_this =  _get_all_finite_sizes(coils_fourier)
@@ -206,14 +206,14 @@ def test_generate_vertices_from_finite_sized_lines_bilinear_spacing():
     assert onp.allclose(onp.asarray(vertices[0, -1, -1]), [1.0, 1.0, 0.0])
 
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_discrete_coil_mesh(data_file):
     coil_posconn = _get_coil_mesh(_get_all_discrete_coils(data_file))
 
     expected_posconn = onp.load(_data_file_to_data_output(data_file, extra_text="_discrete_coil_mesh"))
     onp.testing.assert_allclose(coil_posconn, expected_posconn, atol=1e-12, rtol=1e-12)
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_fourier_coil_mesh(data_file):
     coil_posconn = _get_coil_mesh(_get_all_fourier_coils(data_file))
 
@@ -225,7 +225,7 @@ def test_fourier_coil_mesh(data_file):
 # #=================================================================================================================================================
 
 @pytest.mark.slow
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_discrete_coil_vectorized_position(data_file):
     coilset_jaxsbgeom = _get_all_discrete_coils(data_file)
     
@@ -247,7 +247,7 @@ def test_discrete_coil_vectorized_position(data_file):
     
 
 @pytest.mark.slow
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_fourier_coil_vectorized_position(data_file):
     coilset_jax = _get_all_fourier_coils(data_file)
     
@@ -284,7 +284,7 @@ def _get_fourier_transformation(coilset, n_ftrunc ):
         centres.append(coil.centre_i)
     return onp.concatenate([onp.array(fourier_cos).ravel(), onp.array(fourier_sin).ravel(), onp.array(centres).ravel()], axis=0)
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 @pytest.mark.parametrize("n_ftrunc", [None, 11])
 def test_converting_fourier_coils(data_file, n_ftrunc):
     coilset_jaxsbgeom = _get_all_discrete_coils(data_file)
@@ -297,7 +297,7 @@ def test_converting_fourier_coils(data_file, n_ftrunc):
         atol=1e-12, rtol=1e-12
     )
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 def test_equal_arclength(data_file):
     coilset_jax = _get_all_fourier_coils(data_file)
 
@@ -410,7 +410,7 @@ def _get_finitesize_coilset(coils_jax, frame_class : Type[jsb.coils.base_coil.Fi
     finitesize_coilset = [jsb.coils.base_coil.FiniteSizeCoil(coil_jax, frame_class.from_coil(coil_jax, *additional_arguments_per_coil(frame_class, i, len(coils_jax)))) for i, coil_jax in enumerate(coils_jax)]
     return finitesize_coilset
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 @pytest.mark.parametrize("frame_class", classes_discrete)
 def test_finitesize_coilset_reverse_discrete(data_file, frame_class):
     coils_jaxsbgeom  = _get_all_discrete_coils(data_file)
@@ -418,7 +418,7 @@ def test_finitesize_coilset_reverse_discrete(data_file, frame_class):
     [check_reverse_finite_size(coils_finitesize[i]) for i in range(len(coils_jaxsbgeom))]
 
 
-@pytest.mark.parametrize("data_file", data_input.glob("*_input.npy"))
+@pytest.mark.parametrize("data_file", list(data_input.glob("*_input.npy")))
 @pytest.mark.parametrize("frame_class", classes)
 def test_finitesize_coilset_reverse_fourier(data_file, frame_class):
     coils_jaxsbgeom = _get_all_fourier_coils(data_file)

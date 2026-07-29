@@ -19,7 +19,7 @@ def _extension_s_max():
 #                                                                   Tests for Conversion to Fourier Representation
 # ======================================================================================================================================================================================
 
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_conversion_to_fourier_representation(data_file):
 
     fs_jax = _get_extended_flux_surface(data_file, jsb.flux_surfaces.FluxSurfaceNormalExtendedNoPhi)

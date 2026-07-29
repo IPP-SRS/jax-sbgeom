@@ -65,7 +65,7 @@ def extension_type_to_name(extension_type):
         raise ValueError("Unknown extension type")
 
 @pytest.mark.parametrize("extension_type", extension_types())
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_extension_position(data_file, extension_type):
     fs_jax = _get_extended_flux_surface(data_file, extension_type)
     pos_jsb = _get_positions_jsb(fs_jax, _extended_sampling_grid)    
@@ -74,7 +74,7 @@ def test_extension_position(data_file, extension_type):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("extension_type", extension_types())
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_extension_vectorization(data_file, extension_type):
     fs_jax = _get_extended_flux_surface(data_file, extension_type=extension_type)
     _check_vectorized(fs_jax.cartesian_position)
@@ -82,7 +82,7 @@ def test_extension_vectorization(data_file, extension_type):
     _check_vectorized(fs_jax.principal_curvatures)
 
 @pytest.mark.parametrize("extension_type", extension_types())
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_extension_normals(data_file, extension_type):
     fs_jax = _get_extended_flux_surface(data_file, extension_type)
     pos_jsb = _get_normals_jsb(fs_jax, _extended_sampling_grid)    
@@ -90,7 +90,7 @@ def test_extension_normals(data_file, extension_type):
 
 
 @pytest.mark.parametrize("extension_type", extension_types())
-@pytest.mark.parametrize("data_file", DATA_INPUT_FLUX_SURFACES.glob("*_input.h5"))
+@pytest.mark.parametrize("data_file", list(DATA_INPUT_FLUX_SURFACES.glob("*_input.h5")))
 def test_extension_curvature(data_file, extension_type):
     fs_jax = _get_extended_flux_surface(data_file, extension_type)
     pos_jsb = _get_principal_curvatures_jsb(fs_jax, _extended_sampling_grid)    
