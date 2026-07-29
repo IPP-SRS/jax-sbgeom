@@ -106,8 +106,13 @@ def robust_grid_index_modulo(s, nsurf):
         Grid index/indices (not modulo-wrapped; wrap with `% nsurf` as needed)
     '''
     s_start = jnp.asarray(s) * nsurf
-    tol     = 8 * jnp.finfo(s_start.dtype).eps * nsurf
-    return jnp.floor(s_start + tol).astype(int)
+    if jnp.issubdtype(s_start.dtype, jnp.inexact):
+        # Only floating-point (or complex) s can carry the rounding noise this guards
+        # against; an integer s_start is already exact, and jnp.finfo requires an
+        # inexact dtype.
+        tol      = 8 * jnp.finfo(s_start.dtype).eps * nsurf
+        s_start  = s_start + tol
+    return jnp.floor(s_start).astype(int)
 
 def interpolate_array_modulo(x_interp, s):
     '''
