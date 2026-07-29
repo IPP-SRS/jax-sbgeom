@@ -27,17 +27,9 @@ def interpolate_fractions(s, nsurf):
         Fraction between i0 and i1
     '''
     s_start =  s * (nsurf-1)
-    # Guard against floating-point noise pushing s_start just below an intended
-    # integer boundary (e.g. 57.999996 instead of 58.0) -- this happens whenever s
-    # is constructed to land exactly on a grid point, e.g. via
-    # jnp.linspace(0, 1, nsurf, endpoint=False), and floor() would otherwise
-    # silently select the wrong (previous) index. The tolerance scales with the
-    # dtype's precision and nsurf, since the absolute error in s*nsurf grows with
-    # the magnitude of the result.
-    tol     = 8 * jnp.finfo(s_start.dtype).eps * nsurf
-    i0      = jnp.floor(s_start + tol).astype(int)
+    i0      = jnp.floor(s_start).astype(int)
     i1      = jnp.minimum(i0 + 1, nsurf - 1)
-    ds      = jnp.clip(s_start - i0, 0.0, 1.0)
+    ds      = s_start - i0
     return i0, i1, ds
 
 def interpolate_array(x_interp, s):
@@ -82,16 +74,40 @@ def interpolate_fractions_modulo(s, nsurf):
         Fraction between i0 and i1
     '''
     s_start =  s * nsurf
-    # See interpolate_fractions for why the tolerance is needed: s is routinely
-    # constructed to land exactly on a grid point (e.g. jnp.linspace(0, 1, nsurf,
-    # endpoint=False)), and without it floor() can silently select the wrong
-    # (previous) index due to floating-point rounding of s*nsurf just below the
-    # intended integer.
-    tol     = 8 * jnp.finfo(s_start.dtype).eps * nsurf
-    i0      = jnp.floor(s_start + tol).astype(int)
+    i0      = jnp.floor(s_start).astype(int)
     i1      = i0 + 1
-    ds      = jnp.clip(s_start - i0, 0.0, 1.0)
+    ds      = s_start - i0
     return i0, i1, ds
+
+def robust_grid_index_modulo(s, nsurf):
+    '''
+    Robustly select the (modulo-wrapped) grid index at or below s*nsurf, for direct
+    (non-blended) lookups.
+
+    Unlike interpolate_fractions_modulo, this returns only an index and is meant for
+    callers that pick a single grid point rather than interpolate between two -- so it
+    is worth guarding against floating-point noise pushing s*nsurf just below an
+    intended integer boundary (e.g. 57.999999999999996 instead of 58.0). This happens
+    whenever s is deliberately constructed to land exactly on a grid point (e.g. via
+    jnp.linspace(0, 1, nsurf, endpoint=False)), and floor() would otherwise silently
+    select the wrong (previous) index. The tolerance scales with the dtype's precision
+    and nsurf, since the absolute error in s*nsurf grows with the magnitude of the
+    result.
+
+    Parameters
+    ----------
+    s : jnp.ndarray
+        Normalized parameter(s) between 0 and 1
+    nsurf : int
+        Number of samples
+    Returns
+    -------
+    jnp.ndarray
+        Grid index/indices (not modulo-wrapped; wrap with `% nsurf` as needed)
+    '''
+    s_start = jnp.asarray(s) * nsurf
+    tol     = 8 * jnp.finfo(s_start.dtype).eps * nsurf
+    return jnp.floor(s_start + tol).astype(int)
 
 def interpolate_array_modulo(x_interp, s):
     '''

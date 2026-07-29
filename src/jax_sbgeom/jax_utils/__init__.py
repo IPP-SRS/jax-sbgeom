@@ -2,7 +2,7 @@ from .utils import stack_jacfwd
 from . import optimize
 from . import raytracing
 from . import splines
-from .numerical import interpolate_fractions, interpolate_array, interp1d_jax, interpolate_fractions_modulo, interpolate_array_modulo, interpolate_array_modulo_broadcasted, bilinear_interp
+from .numerical import interpolate_fractions, interpolate_array, interp1d_jax, interpolate_fractions_modulo, interpolate_array_modulo, interpolate_array_modulo_broadcasted, bilinear_interp, robust_grid_index_modulo
 from .numerical import cumulative_trapezoid_uniform_periodic, pchip_interpolation
 from .numerical import resample_uniform_periodic_linear, resample_uniform_periodic_pchip
 from .numerical import reverse_except_begin
@@ -11,7 +11,7 @@ __all__ = ["stack_jacfwd",
               "optimize",  
                 "raytracing",
                 "splines",
-                "interpolate_fractions", "interpolate_array", "interp1d_jax", "interpolate_fractions_modulo", "interpolate_array_modulo", "interpolate_array_modulo_broadcasted", "bilinear_interp",
+                "interpolate_fractions", "interpolate_array", "interp1d_jax", "interpolate_fractions_modulo", "interpolate_array_modulo", "interpolate_array_modulo_broadcasted", "bilinear_interp", "robust_grid_index_modulo",
                 "cumulative_trapezoid_uniform_periodic", "pchip_interpolation",
                 "resample_uniform_periodic_linear","resample_uniform_periodic_pchip",
                 "reverse_except_begin",

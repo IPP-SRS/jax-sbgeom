@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as onp
 from typing import Literal
 from .base_coil import Coil, _finite_size_from_data,_radial_vector_centroid_from_data, _frame_from_radial_vector
-from jax_sbgeom.jax_utils import interpolate_array_modulo_broadcasted, interpolate_fractions_modulo
+from jax_sbgeom.jax_utils import interpolate_array_modulo_broadcasted, interpolate_fractions_modulo, robust_grid_index_modulo
 from jax_sbgeom.jax_utils.numerical import reverse_except_begin
 
 import warnings
@@ -128,12 +128,12 @@ def _discrete_coil_position(discrete_coil : DiscreteCoil,  s):
 
 @jax.jit
 def _discrete_coil_tangent(discrete_coil : DiscreteCoil, s):
-    i0, i1, ds = interpolate_fractions_modulo(s, discrete_coil.positions.shape[0])
-    pos_i0 = _discrete_coil_discrete_position(discrete_coil, i0)
-    pos_i1 = _discrete_coil_discrete_position(discrete_coil, i1)
-    tangent = pos_i1 - pos_i0
-    tangent = tangent / jnp.linalg.norm(tangent, axis=-1, keepdims=True)
-    return tangent
+    '''
+    Tangent is discontinuous at the discrete data points (position is piecewise-linear
+    between them); the forward segment is used by convention.
+    '''
+    i0 = robust_grid_index_modulo(s, discrete_coil.positions.shape[0])
+    return _discrete_coil_discrete_tangent(discrete_coil, i0)
 
 
 
