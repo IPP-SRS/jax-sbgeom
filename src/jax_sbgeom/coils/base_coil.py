@@ -61,7 +61,7 @@ def coil_reverse_parametrisation(coil: Coil):
     
 # The reason this is not just a function is to allow for finite size methods that need to precompute data from the coil
 # such as a RMF method
-class FiniteSizeMethod(eqx.Module, ABC):
+class FiniteSizeMethod(eqx.Module):
     '''
     Abstract base class for finite size methods. All finite size method classes should inherit from this class and implement the abstract methods.
 
