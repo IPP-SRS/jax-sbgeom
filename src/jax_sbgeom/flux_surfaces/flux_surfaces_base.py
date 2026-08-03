@@ -913,6 +913,33 @@ def _normal_interpolated(flux_surface : FluxSurfaceBase, s, theta, phi):
 # ===================================================================================================================================================================================
 _cartesian_position_interpolated_grad_grad = jax.jit(jnp.vectorize(stack_jacfwd(stack_jacfwd(_cartesian_position_interpolated, argnums=(2,3)), argnums = (2,3)), excluded=(0,), signature='(),(),()->(3,2,2)'))
 
+def _principal_curvatures_from_values(
+        dX_dtheta_and_dX_dphi : jnp.ndarray,
+        d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2 : jnp.ndarray):
+        # dx_dtheta_and_dX_dphi has shape (..., 3, 2), last index 0 is d/dtheta, last index 1 is d/dphi
+        # d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2 has shape (..., 3, 2, 2) # 0,0 is d2/dtheta2, 0,1 and 1,0 is d2/dthetadphi, 1,1 is d2/dphi2
+        
+        E = jnp.einsum("...i, ...i->...", dX_dtheta_and_dX_dphi[..., 0], dX_dtheta_and_dX_dphi[..., 0])
+        F = jnp.einsum("...i, ...i->...", dX_dtheta_and_dX_dphi[..., 0], dX_dtheta_and_dX_dphi[..., 1])
+        G = jnp.einsum("...i, ...i->...", dX_dtheta_and_dX_dphi[..., 1], dX_dtheta_and_dX_dphi[..., 1])
+        
+        normal_vector = jnp.cross(dX_dtheta_and_dX_dphi[..., 1], dX_dtheta_and_dX_dphi[..., 0])
+        normal_vector = normal_vector / jnp.linalg.norm(normal_vector, axis=-1, keepdims=True)
+    
+        L = jnp.einsum("...i, ...i->...", normal_vector, d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2[..., 0, 0])
+        M = jnp.einsum("...i, ...i->...", normal_vector, d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2[..., 0, 1])
+        N = jnp.einsum("...i, ...i->...", normal_vector, d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2[..., 1, 1])
+    
+        H = (E * N - 2 * F * M + G * L) / (2 * (E * G - F**2))
+        K = (L * N - M**2) / (E * G - F**2)
+        
+        sqrt_discriminant = jnp.sqrt(H**2 - K) 
+        k1 = - (H + sqrt_discriminant)
+        k2 = - (H - sqrt_discriminant)
+    
+        return jnp.stack([k1, k2], axis=-1)
+    
+
 @eqx.filter_jit
 def _principal_curvatures_interpolated(flux_surface : FluxSurfaceBase, s, theta, phi):
     '''
@@ -936,28 +963,7 @@ def _principal_curvatures_interpolated(flux_surface : FluxSurfaceBase, s, theta,
     dX_dtheta_and_dX_dphi                        = _cartesian_position_interpolated_grad(flux_surface, s, theta, phi)
     d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2 = _cartesian_position_interpolated_grad_grad(flux_surface, s, theta, phi)
 
-    # dx_dtheta_and_dX_dphi has shape (..., 3, 2), last index 0 is d/dtheta, last index 1 is d/dphi
-    # d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2 has shape (..., 3, 2, 2) # 0,0 is d2/dtheta2, 0,1 and 1,0 is d2/dthetadphi, 1,1 is d2/dphi2
-    
-    E = jnp.einsum("...i, ...i->...", dX_dtheta_and_dX_dphi[..., 0], dX_dtheta_and_dX_dphi[..., 0])
-    F = jnp.einsum("...i, ...i->...", dX_dtheta_and_dX_dphi[..., 0], dX_dtheta_and_dX_dphi[..., 1])
-    G = jnp.einsum("...i, ...i->...", dX_dtheta_and_dX_dphi[..., 1], dX_dtheta_and_dX_dphi[..., 1])
-    
-    normal_vector = jnp.cross(dX_dtheta_and_dX_dphi[..., 1], dX_dtheta_and_dX_dphi[..., 0])
-    normal_vector = normal_vector / jnp.linalg.norm(normal_vector, axis=-1, keepdims=True)
-
-    L = jnp.einsum("...i, ...i->...", normal_vector, d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2[..., 0, 0])
-    M = jnp.einsum("...i, ...i->...", normal_vector, d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2[..., 0, 1])
-    N = jnp.einsum("...i, ...i->...", normal_vector, d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2[..., 1, 1])
-
-    H = (E * N - 2 * F * M + G * L) / (2 * (E * G - F**2))
-    K = (L * N - M**2) / (E * G - F**2)
-    
-    sqrt_discriminant = jnp.sqrt(H**2 - K) 
-    k1 = - (H + sqrt_discriminant)
-    k2 = - (H - sqrt_discriminant)
-
-    return jnp.stack([k1, k2], axis=-1)
+    return _principal_curvatures_from_values(dX_dtheta_and_dX_dphi, d2X_dtheta2_and_d2X_dthetadphi_and_d2X_dphi2)
 
 
 

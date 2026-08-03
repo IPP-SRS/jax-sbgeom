@@ -753,7 +753,7 @@ def _fourier_extended_normal(flux_surface : FluxSurfaceBase, extension : FluxSur
     extension_normals    = _normal_interpolated(extension, normalized_d_value , theta, phi)
     extension_normals_d0 = _normal_interpolated(extension, jnp.zeros_like(s) , theta, phi)    
     only_extension       = jnp.array(s >=2.0)
-    
+    # TODO: This is unnormalized!
     return jnp.where(only_extension[..., None], extension_normals,
                      inner_normals + (extension_normals_d0 - inner_normals) * d_value[..., None])
 
