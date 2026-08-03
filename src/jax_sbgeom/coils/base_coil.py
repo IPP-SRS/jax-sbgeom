@@ -1,12 +1,13 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import jax 
+import jax
 import jax.numpy as jnp
 import numpy as onp
 from typing import Literal
 from jax_sbgeom.jax_utils import interpolate_array_modulo_broadcasted, reverse_except_begin
 from functools import partial
 from typing import Type
+import equinox as eqx
 
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
@@ -60,9 +61,7 @@ def coil_reverse_parametrisation(coil: Coil):
     
 # The reason this is not just a function is to allow for finite size methods that need to precompute data from the coil
 # such as a RMF method
-@jax.tree_util.register_dataclass
-@dataclass(frozen=True)
-class FiniteSizeMethod(ABC):
+class FiniteSizeMethod(eqx.Module, ABC):
     '''
     Abstract base class for finite size methods. All finite size method classes should inherit from this class and implement the abstract methods.
 
@@ -135,12 +134,12 @@ class FiniteSizeMethod(ABC):
     
     
 
-@jax.jit
+@eqx.filter_jit
 def _compute_radial_vector(coil : Coil, finitesizemethod : FiniteSizeMethod, s : jnp.ndarray):
     return finitesizemethod.compute_radial_vector(coil, s)
 
-@jax.jit
-def _compute_finite_size_frame(coil : Coil, finitesizemethod : FiniteSizeMethod, s : jnp.ndarray):    
+@eqx.filter_jit
+def _compute_finite_size_frame(coil : Coil, finitesizemethod : FiniteSizeMethod, s : jnp.ndarray):
     radial_vectors = _compute_radial_vector(coil, finitesizemethod, s)
     return _frame_from_radial_vector(coil.tangent(s), radial_vectors)
 
@@ -268,7 +267,7 @@ class FiniteSizeCoil(Coil):
         return _compute_finite_size(self.coil, self.finite_size_method, s, width_radial, width_phi)
 
 
-@jax.jit
+@eqx.filter_jit
 def _compute_finite_size(coil : Coil, finitesizemethod : FiniteSizeMethod, s : jnp.ndarray, width_radial : float, width_phi : float):
     '''
     Compute finite size along the coil as a function of arc length
@@ -333,8 +332,6 @@ def _finite_size_from_data(location, frame, width_radial : float, width_phi : fl
 #                                                                           Centroid
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-@jax.tree_util.register_dataclass
-@dataclass(frozen=True)
 class CentroidFrame(FiniteSizeMethod):
     '''
     Finite size method using centroid frame
@@ -369,9 +366,7 @@ def _radial_vector_centroid_from_data(coil_centre, positions, tangents):
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #                                                                           Frenet-Serret
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-@jax.tree_util.register_dataclass
-@dataclass(frozen=True)
-class FrenetSerretFrame(FiniteSizeMethod):            
+class FrenetSerretFrame(FiniteSizeMethod):
     '''
     Finite size method using Frenet-Serret frame.
     '''
@@ -391,8 +386,6 @@ def _compute_radial_vector_frenet_serret(coil : Coil, s : jnp.ndarray):
 #                                                                           Radial Vector Frame
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-@jax.tree_util.register_dataclass
-@dataclass(frozen=True)
 class RadialVectorFrame(FiniteSizeMethod):
     '''
     Finite size method using precomputed radial vectors
@@ -437,8 +430,6 @@ def _interpolate_radial_vectors(radial_vectors_rmf, s):
 #                                                                           Rotation Minimized Frame
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-@jax.tree_util.register_dataclass
-@dataclass(frozen=True)
 class RotationMinimizedFrame(RadialVectorFrame):
     '''
     Finite size method using rotation minimized frame. This is a subclass of RadialVectorFrame.
