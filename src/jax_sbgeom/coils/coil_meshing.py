@@ -1,9 +1,10 @@
-import jax 
+import jax
 import jax.numpy as jnp
 from jax_sbgeom.flux_surfaces.flux_surface_meshing import _build_triangles_surface, _build_closed_strips
 from .base_coil import FiniteSizeCoil
 from functools import partial
 from .coilset import FiniteSizeCoilSet
+import equinox as eqx
 
 def _mesh_finite_sized_lines_connectivity(n_samples : int, n_lines_per_coil : int, normal_orientation : bool):
     ''''
@@ -43,7 +44,7 @@ def _mesh_rectangular_finite_sized_coils_connectivity(n_samples : int, normal_or
     '''
     return _mesh_finite_sized_lines_connectivity(n_samples, 4, normal_orientation)
 
-@partial(jax.jit, static_argnums = 1)
+@eqx.filter_jit
 def mesh_coil_surface(coil : FiniteSizeCoil, n_s : int, width_radial : float, width_phi : float):
     '''
     Mesh the surface of a coil using a defined number of samples and coil width.
