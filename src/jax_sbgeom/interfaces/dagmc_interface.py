@@ -79,19 +79,32 @@ def create_dagmc_surface_mesh(discrete_blanket : LayeredDiscreteBlanket, flux_su
     for volume in range(no_volumes):
         dagmc_model.create_volume()
     
+    is_full_angle = discrete_blanket.toroidal_extent.full_angle()
     for surface_i, surface in enumerate(dagmc_model.surfaces):
-        # First and last surfaces should point towards implicit complement
-        if surface_i == 0:                                # first curved surface
-            surface.senses  = [dagmc_model.volumes[-0]        ,  None, ]
-        elif surface_i == len(dagmc_model.surfaces) - 1:  # last curved surface
-            surface.senses  = [dagmc_model.volumes[-1]        ,  None, ]
-        elif surface_i % 2 == 1:                          # constant phi surfaces
-            volume_id =  surface_i // 2
-            surface.senses  = [dagmc_model.volumes[ volume_id] , None, ]
-        else:                                             # intermediate curved surfaces
-            volume_id_start = surface_i // 2 - 1
-            volume_id_end   = surface_i // 2 
-            surface.senses  = [dagmc_model.volumes[volume_id_start], dagmc_model.volumes[volume_id_end]]
+        if is_full_angle:
+            # Full-torus shells are closed surfaces. The first and last shell face the
+            # implicit complement, while all interior shell surfaces bound two adjacent
+            # material volumes.
+            if surface_i == 0:
+                surface.senses = [dagmc_model.volumes[0], None]
+            elif surface_i == len(dagmc_model.surfaces) - 1:
+                surface.senses = [dagmc_model.volumes[-1], None]
+            else:
+                surface.senses = [dagmc_model.volumes[surface_i - 1], dagmc_model.volumes[surface_i]]
+        else:
+            # Half-module / open-torus geometry adds constant-phi caps between the curved
+            # radial surfaces, so the original layering logic remains appropriate there.
+            if surface_i == 0:                                # first curved surface
+                surface.senses  = [dagmc_model.volumes[-0]        ,  None, ]
+            elif surface_i == len(dagmc_model.surfaces) - 1:  # last curved surface
+                surface.senses  = [dagmc_model.volumes[-1]        ,  None, ]
+            elif surface_i % 2 == 1:                          # constant phi surfaces
+                volume_id =  surface_i // 2
+                surface.senses  = [dagmc_model.volumes[ volume_id] , None, ]
+            else:                                             # intermediate curved surfaces
+                volume_id_start = surface_i // 2 - 1
+                volume_id_end   = surface_i // 2 
+                surface.senses  = [dagmc_model.volumes[volume_id_start], dagmc_model.volumes[volume_id_end]]
     
     # Tag volumes with appropriate materials
     for volume, material in zip(dagmc_model.volumes, material_names):

@@ -99,3 +99,30 @@ class TestLayeredBlanket:
         ref_file = self.base_file_loc + "_dagmc_blanket.h5m"
         with h5py.File(tmp_file, "r") as out, h5py.File(ref_file, "r") as ref:
             _assert_hdf5_equal(out, ref)
+
+    @pytest.mark.dagmc
+    def test_dagmc_full_torus_sense_assignment(self):
+        from jax_sbgeom.interfaces.dagmc_interface import create_dagmc_surface_mesh
+
+        full_blanket = jsb.interfaces.blanket_creation.LayeredDiscreteBlanketPlasmaTransformed(
+            n_theta=self.layered_blanket.n_theta,
+            n_phi=self.layered_blanket.n_phi,
+            resolution_layers=self.layered_blanket.resolution_layers,
+            toroidal_extent=ToroidalExtent.full(),
+            s_power_sampling=2.0,
+        )
+
+        dagmc_blanket = create_dagmc_surface_mesh(
+            full_blanket,
+            self.equal_arclength_flux_surface,
+            material_names=["mat_1", "mat_2"],
+        )
+
+        assert len(dagmc_blanket.volumes) == full_blanket.n_physical_layers - 1
+        assert len(dagmc_blanket.surfaces) == full_blanket.n_physical_layers
+
+        for i, surface in enumerate(dagmc_blanket.surfaces):
+            if i == 0 or i == len(dagmc_blanket.surfaces) - 1:
+                assert surface.senses[1] is None
+            else:
+                assert surface.senses[1] is not None
