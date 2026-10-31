@@ -37,6 +37,49 @@ class Coil(ABC):
     @abstractmethod
     def reverse_parametrisation(self):
         ...
+
+    # ------------------------------------------------------------------------------------------
+    #  Derived geometric quantities. Default implementations differentiate `position` (forward
+    #  mode), so they are exact for smooth coils (FourierCoil); classes whose `position` is not
+    #  smooth override them (DiscreteCoil).
+    # ------------------------------------------------------------------------------------------
+    def speed(self, s):
+        '''
+        Parametric speed |dx/ds| (s in [0, 1)). Integrating it over s gives the coil length, so
+        for a closed coil it equals the length per unit s.
+
+        Returns an array of the shape of s.
+        '''
+        def speed_single(si):
+            return jnp.linalg.norm(jax.jacfwd(self.position)(si), axis=-1)
+        return jnp.vectorize(speed_single, signature='()->()')(jnp.asarray(s, dtype=float))
+
+    def curvature(self, s):
+        '''
+        Curvature kappa = |x' x x''| / |x'|^3 (1/m) of the space curve, independent of the
+        parametrisation. Returns an array of the shape of s.
+        '''
+        def curvature_single(si):
+            d1 = jax.jacfwd(self.position)(si)
+            d2 = jax.jacfwd(jax.jacfwd(self.position))(si)
+            return jnp.linalg.norm(jnp.cross(d1, d2), axis=-1) / jnp.linalg.norm(d1, axis=-1) ** 3
+        return jnp.vectorize(curvature_single, signature='()->()')(jnp.asarray(s, dtype=float))
+
+    def _default_length_samples(self):
+        return 1024
+
+    def length(self, n_samples : int = None):
+        '''
+        Coil length, the integral of `speed` over one period. The periodic trapezoid rule on a
+        smooth closed curve converges geometrically in n_samples.
+
+        Parameters
+        ----------
+        n_samples : int, optional
+            Number of equally spaced samples in s (default: class dependent).
+        '''
+        n = self._default_length_samples() if n_samples is None else n_samples
+        return jnp.mean(self.speed(jnp.arange(n) / n))
         
 
 # Functional versions for vmapping in coilsets

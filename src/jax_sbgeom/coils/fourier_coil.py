@@ -42,6 +42,10 @@ class FourierCoil(Coil):
     fourier_sin : jnp.ndarray
     centre_i    : jnp.ndarray  
 
+    def _default_length_samples(self):
+        # |x'| is analytic but not band limited; 16 samples per Fourier mode is well converged
+        return max(1024, 16 * self.fourier_cos.shape[-2])
+
     def position(self, s):
         '''
         Position along the coil as a function of arc length

@@ -27,6 +27,7 @@ dependencies = [
     "jax>=0.4.0",
     "jaxlib>=0.4.0",
     "optax",
+    "optimistix",
     "equinox",
     "numpy>=1.20.0",
     "h5py"
