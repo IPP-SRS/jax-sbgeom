@@ -40,6 +40,15 @@ class DiscreteCoil(Coil):
         '''
         return cls(positions=positions, _centre_i = jnp.mean(positions, axis=-2))
 
+    def length(self, n_samples : int = None):
+        '''Length of the closed polyline through the discrete positions (exact; n_samples is unused).'''
+        edges = jnp.roll(self.positions, -1, axis=-2) - self.positions
+        return jnp.sum(jnp.linalg.norm(edges, axis=-1), axis=-1)
+
+    def curvature(self, s):
+        raise NotImplementedError("Curvature is not defined for a piecewise-linear DiscreteCoil; "
+                                  "convert it with convert_to_fourier_coil first.")
+
     def position(self, s):
         '''
         Position along the coil as a function of arc length
