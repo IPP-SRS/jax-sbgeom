@@ -487,6 +487,70 @@ class FluxSurface(FluxSurfaceBase):
         '''
         return _area_from_fourier(self, s, oversampling)
 
+    def mean_cross_section_area(self, s = 1.0):
+        '''
+        phi-averaged area of the poloidal cross section at constant cylindrical angle phi (VMEC / simsopt definition).
+
+        A(phi) is the closed integral of R dZ over theta in the (R, Z) plane; the result is its average over phi. Both integrals are periodic
+        trapezoid rules over the full theta range and one field period in phi. The integrand is band limited (twice the mode numbers), so the
+        sampling used (6 * mpol + 1, 6 * ntor + 1) is exact to round-off.
+
+        Parameters
+        -----------
+        s : float
+            Surface index or normalized flux label (default: last closed flux surface)
+        Returns
+        --------
+        float
+            Mean cross sectional area
+        '''
+        return _mean_cross_section_area_from_fourier(self, s)
+
+    def minor_radius(self, s = 1.0):
+        '''
+        Effective minor radius sqrt(mean_cross_section_area / pi) (VMEC Aminor).
+
+        Parameters
+        -----------
+        s : float
+            Surface index or normalized flux label (default: last closed flux surface)
+        Returns
+        --------
+        float
+            Minor radius
+        '''
+        return jnp.sqrt(self.mean_cross_section_area(s) / jnp.pi)
+
+    def major_radius(self, s = 1.0):
+        '''
+        Effective major radius volume / (2 pi^2 minor_radius^2) (VMEC Rmajor).
+
+        Parameters
+        -----------
+        s : float
+            Surface index or normalized flux label (default: last closed flux surface)
+        Returns
+        --------
+        float
+            Major radius
+        '''
+        return self.volume(s) / (2.0 * jnp.pi ** 2 * self.minor_radius(s) ** 2)
+
+    def aspect_ratio(self, s = 1.0):
+        '''
+        Aspect ratio major_radius / minor_radius.
+
+        Parameters
+        -----------
+        s : float
+            Surface index or normalized flux label (default: last closed flux surface)
+        Returns
+        --------
+        float
+            Aspect ratio
+        '''
+        return self.major_radius(s) / self.minor_radius(s)
+
     def normal(self, s, theta, phi):
         '''
         Normal vector on the flux surface as a function of (s, theta, phi)
@@ -1054,6 +1118,46 @@ def _volume_from_fourier(flux_surface : FluxSurfaceBase, s : float):
     volume = jnp.sum(f_ij) * dtheta * dphi / 3.0 * flux_surface.nfp 
 
     return volume
+
+@eqx.filter_jit
+def _mean_cross_section_area_from_fourier(flux_surface : FluxSurfaceBase, s : float):
+    '''
+    Compute the phi-averaged area of the (R, Z) cross section at constant cylindrical angle phi.
+
+    A(phi) = closed integral of R dZ/dtheta dtheta, averaged over phi. Both integrals are periodic trapezoid rules (one field period in phi).
+    R and dZ/dtheta contain modes up to (mpol, ntor), so the integrand has modes up to (2 mpol, 2 ntor) and the 6 * mode + 1 sampling
+    (as in the volume) is exact to round-off. dZ/dtheta is obtained with forward-mode autodiff.
+
+    Parameters
+    -----------
+    flux_surface : FluxSurfaceBase
+        The flux surface object.
+    s : float
+        The normalized flux surface label (0 <= s <= 1).
+    Returns
+    --------
+    float
+        Mean cross sectional area.
+    '''
+    nyquist_sampling = 6
+    n_theta = flux_surface.settings.mpol * nyquist_sampling + 1
+    n_phi   = flux_surface.settings.ntor * nyquist_sampling + 1
+
+    theta = jnp.linspace(0, 2 * jnp.pi, n_theta, endpoint=False)
+    phi   = jnp.linspace(0, 2 * jnp.pi / flux_surface.nfp, n_phi, endpoint=False)
+    tt, pp = jnp.meshgrid(theta, phi, indexing='ij')
+
+    def rz(th, ph):
+        return _cylindrical_position_interpolated(flux_surface, s, th, ph)[:2]
+
+    def integrand(th, ph):
+        R = rz(th, ph)[0]
+        dZ_dtheta = jax.jacfwd(rz, argnums=0)(th, ph)[1]
+        return R * dZ_dtheta
+
+    f_ij = jax.vmap(jax.vmap(integrand))(tt, pp)
+    # theta orientation may be reversed (normals pointing inwards): the area itself is positive.
+    return jnp.abs(jnp.mean(f_ij) * 2 * jnp.pi)
 
 @eqx.filter_jit
 def _volume_from_fourier_half_mod(flux_surface : FluxSurfaceBase, s : float):

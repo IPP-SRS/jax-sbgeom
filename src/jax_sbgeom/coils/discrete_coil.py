@@ -45,6 +45,17 @@ class DiscreteCoil(Coil):
         edges = jnp.roll(self.positions, -1, axis=-2) - self.positions
         return jnp.sum(jnp.linalg.norm(edges, axis=-1), axis=-1)
 
+    def centroid(self, n_samples : int = None):
+        '''Length-weighted centroid of the closed polyline (exact: segment midpoints weighted by segment length; n_samples is unused).'''
+        edges = jnp.roll(self.positions, -1, axis=-2) - self.positions
+        w = jnp.linalg.norm(edges, axis=-1)
+        mid = 0.5 * (self.positions + jnp.roll(self.positions, -1, axis=-2))
+        return jnp.sum(mid * w[..., None], axis=-2) / jnp.sum(w, axis=-1)[..., None]
+
+    def bounding_box(self, n_samples : int = None):
+        '''Bounding box (min, max) of the closed polyline: the extrema of a piecewise linear curve are at the vertices (exact; arguments unused).'''
+        return jnp.min(self.positions, axis=-2), jnp.max(self.positions, axis=-2)
+
     def curvature(self, s):
         raise NotImplementedError("Curvature is not defined for a piecewise-linear DiscreteCoil; "
                                   "convert it with convert_to_fourier_coil first.")

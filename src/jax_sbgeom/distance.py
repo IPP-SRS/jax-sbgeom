@@ -29,7 +29,7 @@ from typing import NamedTuple, Optional
 
 import jax
 import jax.numpy as jnp
-import optimistix as optx
+from jax_sbgeom.jax_utils.stationary import polish_stationary
 
 _TWO_PI = 2.0 * jnp.pi
 
@@ -41,13 +41,11 @@ class MinimumDistance(NamedTuple):
 
 
 def _solve(f, starts, args, tol, max_steps):
-    solver = optx.Newton(rtol=tol, atol=tol)
-    sol = jax.vmap(lambda x0: optx.root_find(jax.grad(f), solver, x0, args=args, throw=False, max_steps=max_steps))(starts)
-    d = jax.vmap(lambda x: jnp.sqrt(2.0 * f(x, args) + 1e-300))(sol.value)
-    ok = sol.result == optx.RESULTS.successful
+    x, ok = polish_stationary(f, starts, args, tol=tol, max_steps=max_steps)
+    d = jax.vmap(lambda xi: jnp.sqrt(2.0 * f(xi, args) + 1e-300))(x)
     best = jnp.argmin(jnp.where(ok, d, jnp.inf))
     best = jnp.where(ok.any(), best, jnp.argmin(d))
-    return MinimumDistance(d[best], jax.lax.stop_gradient(jnp.mod(sol.value[best], _TWO_PI)), ok[best])
+    return MinimumDistance(d[best], jax.lax.stop_gradient(jnp.mod(x[best], _TWO_PI)), ok[best])
 
 
 def _closest_samples(points_a, points_b, k):
