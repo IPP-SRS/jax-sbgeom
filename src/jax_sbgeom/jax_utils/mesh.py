@@ -194,3 +194,27 @@ def volume_of_mesh(positions : jnp.ndarray, connectivity : jnp.ndarray):
         return jnp.abs(volumes_tetrahedra(positions, connectivity)).sum()
     else:
         raise ValueError("Connectivity must have shape (n_elements, 3) for triangles or (n_elements, 4) for tetrahedra.")
+
+
+@jax.jit
+def area_of_mesh(positions : jnp.ndarray, connectivity : jnp.ndarray):
+    '''
+    Total area of a triangle mesh (sum of the triangle areas).
+
+    Parameters
+    ----------
+    positions : jnp.ndarray
+        Vertex positions, shape (n_vertices, 3)
+    connectivity : jnp.ndarray
+        Triangle vertex indices, shape (n_triangles, 3)
+    Returns
+    -------
+    float
+        Sum of the triangle areas
+    '''
+    if connectivity.shape[-1] != 3:
+        raise ValueError("Connectivity must have shape (n_elements, 3) for triangles.")
+    a = positions[connectivity[:,0], :]
+    b = positions[connectivity[:,1], :]
+    c = positions[connectivity[:,2], :]
+    return 0.5 * jnp.sum(jnp.linalg.norm(jnp.cross(b - a, c - a), axis=-1))
