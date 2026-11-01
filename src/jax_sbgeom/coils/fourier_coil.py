@@ -20,9 +20,9 @@ class FourierCoil(Coil):
 
     It uses the Fourier series to compute the position, tangent and normal along the coil.
 
-    x = centre_i[0] + sum_{n=1}^N [ fourier_cos[0, n] * cos(2 pi n s) + fourier_sin[0, n] * sin(2 pi n s) ]
-    y = centre_i[1] + sum_{n=1}^N [ fourier_cos[1, n] * cos(2 pi n s) + fourier_sin[1, n] * sin(2 pi n s) ]
-    z = centre_i[2] + sum_{n=1}^N [ fourier_cos[2, n] * cos(2 pi n s) + fourier_sin[2, n] * sin(2 pi n s) ]
+    x = centre_i[0] + sum_{n=1}^N [ fourier_cos[n-1, 0] * cos(2 pi n s) + fourier_sin[n-1, 0] * sin(2 pi n s) ]
+    y = centre_i[1] + sum_{n=1}^N [ fourier_cos[n-1, 1] * cos(2 pi n s) + fourier_sin[n-1, 1] * sin(2 pi n s) ]
+    z = centre_i[2] + sum_{n=1}^N [ fourier_cos[n-1, 2] * cos(2 pi n s) + fourier_sin[n-1, 2] * sin(2 pi n s) ]
 
     For creating FourierCoil objects from discrete positions, use the function `curve_to_fourier_coefficients'`.
     The parametrisation can be converted to equal-arclength by using `convert_fourier_coil_to_equal_arclength` or `convert_fourier_coilset_to_equal_arclength`.
@@ -30,7 +30,7 @@ class FourierCoil(Coil):
     Parameters
     ----------
     fourier_cos : jnp.ndarray
-        Fourier cosine coefficients [N_modes, 3]
+        Fourier cosine coefficients [N_modes, 3] (layout (mode, xyz); a batch of coils adds a leading coil dimension)
     fourier_sin : jnp.ndarray
         Fourier sine coefficients [N_modes, 3]
     centre_i : jnp.ndarray

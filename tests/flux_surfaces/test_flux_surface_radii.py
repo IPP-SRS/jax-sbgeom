@@ -103,3 +103,15 @@ def test_helias5_vmec_regression():
     assert jnp.allclose(fs.minor_radius(1.0), 1.8020693189284707, rtol=1e-8)       # VMEC Aminor_p
     assert jnp.allclose(fs.major_radius(1.0), 22.193094912867643, rtol=1e-8)
     assert jnp.allclose(fs.aspect_ratio(1.0), 12.315339193535513, rtol=1e-8)
+
+
+def test_magnetic_axis_is_the_s0_surface():
+    """Two-surface description whose s=0 row is the circle R = R0: the axis is that circle at z = 0."""
+    st = FluxSurfaceSettings(mpol=1, ntor=0, nfp=1)
+    mv = onp.asarray(jsb.flux_surfaces.flux_surfaces_base._create_mpol_vector(st))
+    R = onp.zeros((2, len(mv))); Z = onp.zeros((2, len(mv)))
+    R[:, mv == 0] = 5.0; R[1, mv == 1] = 1.0; Z[1, mv == 1] = 1.0
+    fs = FluxSurface.from_rmnc_zmns_settings(jnp.asarray(R), jnp.asarray(Z), st, make_normals_point_outwards=False)
+    phi = jnp.linspace(0.0, 2 * jnp.pi, 7, endpoint=False)
+    axis = fs.magnetic_axis(phi)
+    onp.testing.assert_allclose(axis, jnp.stack([5.0 * jnp.cos(phi), 5.0 * jnp.sin(phi), 0.0 * phi], -1), atol=1e-12)

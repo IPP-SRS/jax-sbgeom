@@ -551,6 +551,22 @@ class FluxSurface(FluxSurfaceBase):
         '''
         return self.major_radius(s) / self.minor_radius(s)
 
+    def magnetic_axis(self, phi):
+        '''
+        Magnetic axis: the s = 0 surface, as Cartesian points at the toroidal angles phi.
+
+        Parameters
+        -----------
+        phi : jnp.ndarray
+            Toroidal angles [rad], shape (n,)
+        Returns
+        --------
+        jnp.ndarray
+            Axis positions, shape (n, 3)
+        '''
+        phi = jnp.asarray(phi, dtype=float)
+        return self.cartesian_position(0.0, jnp.zeros_like(phi), phi)
+
     def normal(self, s, theta, phi):
         '''
         Normal vector on the flux surface as a function of (s, theta, phi)
