@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as onp
 from typing import Literal
 from jax_sbgeom.jax_utils import interpolate_array_modulo_broadcasted, reverse_except_begin
-from jax_sbgeom.jax_utils.stationary import polish_stationary
+from jax_sbgeom.jax_utils.stationary import Polish, maximise_periodic
 from functools import partial
 from typing import Type
 import equinox as eqx
@@ -45,6 +45,21 @@ class Coil(ABC):
     #  mode), so they are exact for smooth coils (FourierCoil); classes whose `position` is not
     #  smooth override them (DiscreteCoil).
     # ------------------------------------------------------------------------------------------
+    def derivative(self, s):
+        '''
+        Derivative dx/ds of the position with respect to the normalised arc length s (not normalised, unlike `tangent`).
+        `position` acts pointwise on s, so one forward-mode pass gives the derivative at every s.
+
+        Returns an array of shape s.shape + (3,).
+        '''
+        s = jnp.asarray(s, dtype=float)
+        return jax.jvp(self.position, (s,), (jnp.ones_like(s),))[1]
+
+    def second_derivative(self, s):
+        '''Second derivative d2x/ds2 (one more forward-mode pass of `derivative`). Returns an array of shape s.shape + (3,).'''
+        s = jnp.asarray(s, dtype=float)
+        return jax.jvp(self.derivative, (s,), (jnp.ones_like(s),))[1]
+
     def speed(self, s):
         '''
         Parametric speed |dx/ds| (s in [0, 1)). Integrating it over s gives the coil length, so
@@ -52,20 +67,15 @@ class Coil(ABC):
 
         Returns an array of the shape of s.
         '''
-        def speed_single(si):
-            return jnp.linalg.norm(jax.jacfwd(self.position)(si), axis=-1)
-        return jnp.vectorize(speed_single, signature='()->()')(jnp.asarray(s, dtype=float))
+        return jnp.linalg.norm(self.derivative(s), axis=-1)
 
     def curvature(self, s):
         '''
         Curvature kappa = |x' x x''| / |x'|^3 (1/m) of the space curve, independent of the
         parametrisation. Returns an array of the shape of s.
         '''
-        def curvature_single(si):
-            d1 = jax.jacfwd(self.position)(si)
-            d2 = jax.jacfwd(jax.jacfwd(self.position))(si)
-            return jnp.linalg.norm(jnp.cross(d1, d2), axis=-1) / jnp.linalg.norm(d1, axis=-1) ** 3
-        return jnp.vectorize(curvature_single, signature='()->()')(jnp.asarray(s, dtype=float))
+        d1, d2 = self.derivative(s), self.second_derivative(s)
+        return jnp.linalg.norm(jnp.cross(d1, d2), axis=-1) / jnp.linalg.norm(d1, axis=-1) ** 3
 
     def _default_length_samples(self):
         return 1024
@@ -107,7 +117,7 @@ class Coil(ABC):
         Axis-aligned bounding box (min, max) of the curve along x, y and z (the height of a coil is `max[2] - min[2]`).
 
         The curve is sampled at n_samples equally spaced points; the best sample of every coordinate is polished by
-        `polish_stationary` (Newton on d x_i / ds = 0, implicit adjoint, so gradients are exact). The result is never worse
+        `maximise_periodic` (Newton on d x_i / ds = 0, implicit adjoint, so gradients are exact). The result is never worse
         than the sampled extremum.
 
         Parameters
@@ -119,18 +129,16 @@ class Coil(ABC):
         (jnp.ndarray, jnp.ndarray)
             Minimum and maximum coordinates, each of shape (3,)
         '''
-        n    = self._default_length_samples() if n_samples is None else n_samples
-        grid = jnp.arange(n) / n
-        x    = self.position(grid)                                                          # (n, 3)
+        n = self._default_length_samples() if n_samples is None else n_samples
+        polish = Polish(1e-10, 12)
+        lo = jnp.stack([-maximise_periodic(_signed_coordinate, (self, i, -1.0), n, polish) for i in range(3)])
+        hi = jnp.stack([maximise_periodic(_signed_coordinate, (self, i, 1.0), n, polish) for i in range(3)])
+        return lo, hi
 
-        def extremum(i, sign):                                                              # sign=+1: max, -1: min
-            i0       = jnp.argmax(sign * x[:, i])
-            f        = lambda t, coil: sign * coil.position(t[0] / (2 * jnp.pi))[i]
-            t, ok    = polish_stationary(f, jnp.array([[2 * jnp.pi * grid[i0]]]), self)
-            polished = f(t[0], self)
-            return sign * jnp.where(ok[0] & (polished > sign * x[i0, i]), polished, sign * x[i0, i])
 
-        return (jnp.stack([extremum(i, -1.0) for i in range(3)]), jnp.stack([extremum(i, 1.0) for i in range(3)]))
+def _signed_coordinate(s, args):
+    coil, i, sign = args
+    return sign * coil.position(s)[i]
 
 
 # Functional versions for vmapping in coilsets
