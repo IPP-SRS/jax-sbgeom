@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as onp
 from typing import Literal
 from jax_sbgeom.jax_utils import interpolate_array_modulo_broadcasted, reverse_except_begin
-from jax_sbgeom.jax_utils.stationary import polish_stationary
+from jax_sbgeom.jax_utils.stationary import Polish, maximise_periodic
 from functools import partial
 from typing import Type
 import equinox as eqx
@@ -117,7 +117,7 @@ class Coil(ABC):
         Axis-aligned bounding box (min, max) of the curve along x, y and z (the height of a coil is `max[2] - min[2]`).
 
         The curve is sampled at n_samples equally spaced points; the best sample of every coordinate is polished by
-        `polish_stationary` (Newton on d x_i / ds = 0, implicit adjoint, so gradients are exact). The result is never worse
+        `maximise_periodic` (Newton on d x_i / ds = 0, implicit adjoint, so gradients are exact). The result is never worse
         than the sampled extremum.
 
         Parameters
@@ -129,18 +129,16 @@ class Coil(ABC):
         (jnp.ndarray, jnp.ndarray)
             Minimum and maximum coordinates, each of shape (3,)
         '''
-        n    = self._default_length_samples() if n_samples is None else n_samples
-        grid = jnp.arange(n) / n
-        x    = self.position(grid)                                                          # (n, 3)
+        n = self._default_length_samples() if n_samples is None else n_samples
+        polish = Polish(1e-10, 12)
+        lo = jnp.stack([-maximise_periodic(_signed_coordinate, (self, i, -1.0), n, polish) for i in range(3)])
+        hi = jnp.stack([maximise_periodic(_signed_coordinate, (self, i, 1.0), n, polish) for i in range(3)])
+        return lo, hi
 
-        def extremum(i, sign):                                                              # sign=+1: max, -1: min
-            i0       = jnp.argmax(sign * x[:, i])
-            f        = lambda t, coil: sign * coil.position(t[0] / (2 * jnp.pi))[i]
-            t, ok    = polish_stationary(f, jnp.array([[2 * jnp.pi * grid[i0]]]), self)
-            polished = f(t[0], self)
-            return sign * jnp.where(ok[0] & (polished > sign * x[i0, i]), polished, sign * x[i0, i])
 
-        return (jnp.stack([extremum(i, -1.0) for i in range(3)]), jnp.stack([extremum(i, 1.0) for i in range(3)]))
+def _signed_coordinate(s, args):
+    coil, i, sign = args
+    return sign * coil.position(s)[i]
 
 
 # Functional versions for vmapping in coilsets

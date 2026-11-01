@@ -8,8 +8,11 @@ Filament fields use the periodic trapezoid rule on the analytic curve (spectrall
     (kernel softened by delta * a * b) plus local terms for the rectangular cross-section (equation numbers refer to the paper).
 '''
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
+from jax_sbgeom.jax_utils.stationary import Polish, maximise_periodic
 from .base_coil import FiniteSizeCoil
 from .biot_savart import biot_savart, Constant
 from .coilset import CoilSet
@@ -194,7 +197,7 @@ def self_field(coil: FiniteSizeCoil, current: float, width: float, height: float
 
 
 def max_force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: float, height: float, indices: jnp.ndarray,
-                                  n_eval: int, n_src: int, n_mut: int) -> jnp.ndarray:
+                                  n_eval: int, n_src: int, n_mut: int, polish: Polish | None) -> jnp.ndarray:
     '''
     Maximum of |I (T x B)| / (width * height) [N/m^3] over the selected coils and n_eval points on their centreline
     (the force on the current filament, spread over the cross-section). B is the regularised self field B_reg of the
@@ -216,18 +219,28 @@ def max_force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: 
         approach 0.96 m, 10 coils evaluated) n_mut = 64, 128, 256 has relative errors of 1.4e-3, 1.4e-5, 1.2e-9 against
         n_mut = 512, and n_src = 256 differs by 6e-7 from 1024. The maximum is taken over the n_eval sampled points, so it
         is a lower bound of the true maximum: n_eval = 128, 256 differ by 1.2e-3, 1.8e-4 from 1024.
+    polish : Polish | None
+        None: the maximum over the samples. Polish(tol, max_steps): the best sample of every coil is polished by Newton
+        on the stationary condition in s (`maximise_periodic`), so the result is never below the sampled maximum and is
+        accurate to the quadrature error instead of the sampling error (coil 3 of Helias5, n_eval = 256: +6.6e-5). Newton
+        refines the best sample's own maximum, so n_eval must still be large enough to pick the right one.
     '''
     _, delta = k_delta(width, height)
-    consts = (coils, currents, coil_elements(coils, n_mut), jnp.arange(n_eval) / n_eval, delta * width * height, width * height)
-    return jnp.max(jax.vmap(_force_one, in_axes=(0, None, None))(indices, consts, n_src))
+    consts = (coils, currents, coil_elements(coils, n_mut), delta * width * height, width * height)
+    return jnp.max(jax.vmap(partial(_force_one, n_src=n_src, n_eval=n_eval, polish=polish), in_axes=(0, None))(indices, consts))
 
 
-def _force_one(i, consts, n_src):
-    coils, currents, (pos, dl_all), sn, eps2, area = consts
+def _force_one(i, consts, n_src, n_eval, polish):
+    return maximise_periodic(_force_at, (i, consts, n_src), n_eval, polish)
+
+
+def _force_at(s, args):
+    '''|I (T x B)| / area at the parameter s of coil i.'''
+    i, (coils, currents, (pos, dl_all), eps2, area), n_src = args
     c, j = coils[i], _others(currents.shape[0], i)
-    x, (xs, dl) = c.position(sn), _nodes(c, n_src)
+    x, (xs, dl) = c.position(jnp.reshape(s, (1,))), _nodes(c, n_src)
     b = regularised_field(x, xs, dl, currents[i], eps2) + _field_of_nodes(pos[j], dl_all[j], currents[j], x)
-    return jnp.max(jnp.linalg.norm(currents[i] * jnp.cross(c.tangent(sn), b) / area, axis=-1))
+    return jnp.linalg.norm(currents[i] * jnp.cross(c.tangent(jnp.reshape(s, (1,))), b) / area, axis=-1)[0]
 
 
 # ---------------------------------------------------------------------------------------------------------------------
