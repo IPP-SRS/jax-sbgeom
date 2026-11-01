@@ -6,8 +6,8 @@ import numpy as onp
 import pytest
 from scipy.special import ellipk, ellipe
 
-from jax_sbgeom.coils import (FourierCoil, CoilSet, FiniteSizeCoil, FiniteSizeCoilSet, CentroidFrame, filament_field, self_field,
-                              edge_field_norm, max_force_density, inductance_matrix, total_inductance)
+from jax_sbgeom.coils import (FourierCoil, CoilSet, FiniteSizeCoil, CentroidFrame, filament_field, self_field,
+                              max_force_density, inductance_matrix, total_inductance)
 from jax_sbgeom.coils.fields import MU0, _others
 
 jax.config.update("jax_enable_x64", True)
@@ -138,18 +138,6 @@ def test_self_field_convergence_n_src_and_spectral_in_n_eval():
     b = self_field(fs(coil), I, w, h, jnp.arange(128) / 128, n_src=4096)
     spec = onp.abs(onp.fft.rfft(onp.asarray(b), axis=0))
     assert spec[30:].max() < 1e-12 * spec.max()
-
-
-def test_edge_field_norm_is_self_plus_other_coils():
-    cs = FiniteSizeCoilSet.from_coils([wavy(), wavy(1.3)], CentroidFrame)
-    cur, w, h, n = jnp.array([1e5, 2e5]), 0.1, 0.07, 16
-    got = edge_field_norm(cs, cur, jnp.arange(2), w, h, n_eval=n, n_src=256, n_mut=64)
-    s = jnp.arange(n) / n
-    for i, other in ((0, 1), (1, 0)):
-        ci = cs[i]
-        x, p = jax.vmap(ci.position)(s), ci.finite_size_frame(s)[:, 0]
-        b = self_field(ci, cur[i], w, h, s, u=-1.0, n_src=256) + filament_field(CoilSet(cs[other:other + 1].coil), cur[other:other + 1], x - p * w / 2, 64)
-        onp.testing.assert_allclose(got[i], jnp.linalg.norm(b, axis=-1), rtol=1e-10)
 
 
 def test_max_force_density_mutual_part():

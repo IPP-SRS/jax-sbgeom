@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 from .base_coil import FiniteSizeCoil
 from .biot_savart import biot_savart, Constant
-from .coilset import CoilSet, FiniteSizeCoilSet
+from .coilset import CoilSet
 
 MU0 = Constant.MU_0
 
@@ -221,35 +221,6 @@ def _force_one(consts, n_src, i):
     x, (xs, dl) = c.position(sn), _nodes(c, n_src)
     b = regularised_field(x, xs, dl, currents[i], eps2) + _field_of_nodes(pos[j], dl_all[j], currents[j], x)
     return jnp.max(jnp.linalg.norm(currents[i] * jnp.cross(c.tangent(sn), b) / area, axis=-1))
-
-
-def edge_field_norm(coils: FiniteSizeCoilSet, currents: jnp.ndarray, indices: jnp.ndarray, width: float,
-                    height: float, n_eval: int = 256, n_src: int = 1024, n_mut: int = 256) -> jnp.ndarray:
-    '''
-    |B| [len(indices), n_eval] at the plasma-facing edge (u = -1, v = 0) of the winding pack of the selected coils: the
-    self field (`self_field`) plus the filament field of all other coils at x - p * width / 2, where p is the first
-    direction of the finite-size frame of the coils.
-
-    Parameters
-    ----------
-    coils : FiniteSizeCoilSet
-    currents : jnp.ndarray [n_coils]
-    indices : jnp.ndarray
-        Coils to evaluate.
-    width, height : float
-    n_eval, n_src, n_mut : int
-        Evaluation points per coil, nodes of the self field, nodes of the other coils.
-    '''
-    consts = (coils, currents, coil_elements(coils, n_mut), jnp.arange(n_eval) / n_eval, width, height)
-    return jax.lax.map(partial(_edge_one, consts, n_src), indices)
-
-
-def _edge_one(consts, n_src, i):
-    coils, currents, (pos, dl), s, width, height = consts
-    c, j = coils[i], _others(currents.shape[0], i)
-    edge = c.position(s) - c.finite_size_frame(s)[:, 0] * width / 2.0
-    bs = self_field(c, currents[i], width, height, s, u=-1.0, n_src=n_src)
-    return jnp.linalg.norm(bs + _field_of_nodes(pos[j], dl[j], currents[j], edge), axis=-1)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
