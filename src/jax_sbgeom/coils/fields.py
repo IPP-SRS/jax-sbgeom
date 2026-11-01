@@ -214,12 +214,7 @@ def force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: floa
     s : float
         Curve parameter in [0, 1).
     n_src, n_mut : int
-        Nodes of the self field, nodes of each of the other coils. The trapezoid rule converges geometrically in both, at
-        a rate set by the closest approach of two coils: for the 50 Helias5 coils (closest approach 0.96 m, 10 coils
-        evaluated) n_mut = 64, 128, 256 has relative errors of 1.4e-3, 1.4e-5, 1.2e-9 against n_mut = 512 and
-        n_src = 256 differs by 6e-7 from 1024. The cost of one evaluation is (n_src + (n_coils - 1) * n_mut) pairs of
-        nodes and points (48 bytes of transient memory each). The nodes do not depend on s, so jit and vmap over s compute
-        them once (measured on Helias5: passing them in precomputed is not faster).
+        Nodes of the self field, nodes of each of the other coils. 
     '''
     _, delta = k_delta(width, height)
     pos, dl_all = coil_elements(coils, n_mut)
@@ -250,8 +245,7 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int, 
         Only compute the rows of the first n_rows coils (all columns): n_rows = n_coils for the full matrix, fewer for
         a periodic coil set (see `total_inductance`).
     n_mut, n_self : int
-        Nodes per coil of the mutual and self terms. For the 50 Helias5 coils (10 rows) n_mut = 128, 256 has relative
-        errors of 7e-8, 2e-12 against n_mut = 512 (not monotone below: 8e-5 at 96); n_self was not studied there.
+        Nodes per coil of the mutual and self terms. 
 
     Returns
     -------
