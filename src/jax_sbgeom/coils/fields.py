@@ -194,13 +194,14 @@ def self_field(coil: FiniteSizeCoil, current: float, width: float, height: float
 
 
 def max_force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: float, height: float, indices=None,
-                                  n_eval: int = 256, n_src: int = 1024, n_mut: int = 256) -> jnp.ndarray:
+                                  n_eval: int = 256, n_src: int = 1024, n_mut: int = 128) -> jnp.ndarray:
     '''
     Maximum of |I (T x B)| / (width * height) [N/m^3] over the selected coils and n_eval points on their centreline
     (the force on the current filament, spread over the cross-section). B is the regularised self field B_reg of the
     coil (without the local cross-section terms of `self_field`) plus the filament field of all other coils.
     All selected coils are evaluated at once (vmap): the transient memory is about
-    n_eval * (n_src + (n_coils - 1) * n_mut) * 24 bytes per coil.
+    n_eval * (n_src + (n_coils - 1) * n_mut) * 48 bytes per coil (measured for 50 coils with n_mut = 256: 8.3 GB all
+    at once, 0.17 GB one at a time).
 
     Parameters
     ----------
@@ -210,7 +211,10 @@ def max_force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: 
     indices : jnp.ndarray, optional
         Coils to evaluate (default: all).
     n_eval, n_src, n_mut : int
-        Evaluation points per coil, nodes of the self field, nodes of the other coils.
+        Evaluation points per coil, nodes of the self field, nodes of the other coils. The trapezoid rule converges
+        geometrically: for the 50 Helias coils (closest approach about 1 m) n_mut = 64, 128, 256 gives relative errors of
+        8e-5, 2e-7, 1e-12 against n_mut = 512. Closer coils need more nodes. The maximum is taken over the n_eval
+        sampled points, so it is a lower bound of the true maximum (halving n_eval = 256 changed it by 1e-4).
     '''
     indices = jnp.arange(coils.n_coils) if indices is None else indices
     _, delta = k_delta(width, height)
@@ -229,7 +233,7 @@ def _force_one(i, consts, n_src):
 # ---------------------------------------------------------------------------------------------------------------------
 #  Inductance
 # ---------------------------------------------------------------------------------------------------------------------
-def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int | None = None, n_mut: int = 256,
+def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int | None = None, n_mut: int = 128,
                       n_self: int = 1024) -> jnp.ndarray:
     '''
     Rows of the inductance matrix [H]. The off-diagonal entries are Neumann integrals
@@ -246,7 +250,8 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int |
     n_rows : int, optional
         Only compute the rows of the first n_rows coils (default: all). Use for periodic coil sets.
     n_mut, n_self : int
-        Nodes per coil of the mutual and self terms.
+        Nodes per coil of the mutual and self terms. For the 50 Helias coils n_mut = 64, 128, 256 gives relative errors of
+        7.6e-5, 2.6e-7, 1e-12 against n_mut = 512, and n_self = 128, 256 gives 1.1e-6, 4e-11 against 1024.
 
     Returns
     -------
@@ -276,7 +281,7 @@ def _inductance_row(i, consts):
 
 
 def total_inductance(coils: CoilSet, width: float, height: float, n_rows: int | None = None, repeats: int = 1,
-                     n_mut: int = 256, n_self: int = 1024) -> jnp.ndarray:
+                     n_mut: int = 128, n_self: int = 1024) -> jnp.ndarray:
     '''
     Sum of all entries of the inductance matrix [H], i.e. the inductance of the coils connected in series (equal
     currents). For a coil set invariant under a symmetry that maps the first n_rows coils onto all the others, pass
