@@ -184,7 +184,10 @@ class FluxSurfaceExtendedDistanceMatrix(ParametrisedSurface):
         raise NotImplementedError
 
 
-_cartesian_position_normal_d_matrix = jnp.vectorize(stack_jacfwd(lambda flux_surface, s, theta, phi : flux_surface.cartesian_position(s, theta, phi), argnums=1), excluded = (0,), signature = "(),(),()->(3)")
+def _cartesian_position_of_surface(flux_surface, s, theta, phi):
+    return flux_surface.cartesian_position(s, theta, phi)
+
+_cartesian_position_normal_d_matrix = jnp.vectorize(stack_jacfwd(_cartesian_position_of_surface, argnums=1), excluded = (0,), signature = "(),(),()->(3)")
 # ===================================================================================================================================================================================
 #                                                                           Normal Extended
 # ===================================================================================================================================================================================
@@ -503,6 +506,15 @@ def _distance_between_phi_phi_desired(flux_surface : FluxSurfaceBase, s, theta, 
     positions =  _normal_extended_cartesian_position(flux_surface, s, theta, x)
     return _distance_between_angles(jnp.arctan2(positions[...,1], positions[...,0]), phi)
 
+def _secant_step_loop(flux_surface, s, theta, phi, x_minus_two, x_minus_one, f_minus_two, n_iter):
+    # n_iter is a small static int: unrolled (the flux surface has static fields, so it cannot be a loop carry)
+    for _ in range(n_iter):
+        f_minus_one = _distance_between_phi_phi_desired(flux_surface, s, theta, phi, x_minus_one)
+        x_new = x_minus_one - f_minus_one * (x_minus_one - x_minus_two) / (f_minus_one - f_minus_two + 1e-16)
+        x_minus_two, x_minus_one, f_minus_two = x_minus_one, x_new, f_minus_one
+    return x_minus_one
+
+
 @eqx.filter_jit
 def _normal_extended_constant_phi_find_phi(flux_surface : FluxSurfaceBase, s , theta, phi, n_iter : int = 5):
     '''
@@ -535,14 +547,7 @@ def _normal_extended_constant_phi_find_phi(flux_surface : FluxSurfaceBase, s , t
     
     f_minus_two = _distance_between_phi_phi_desired(flux_surface, s, theta, phi, x_minus_two)
 
-    def secant_iteration(i, vals):
-        x_minus_two, x_minus_one, f_minus_two = vals
-        f_minus_one = _distance_between_phi_phi_desired(flux_surface, s, theta, phi, x_minus_one)
-
-        x_new = x_minus_one - f_minus_one * (x_minus_one - x_minus_two) / (f_minus_one - f_minus_two + 1e-16)
-        return (x_minus_one, x_new, f_minus_one)
-
-    x_final = jax.lax.fori_loop(0, n_iter, secant_iteration, (x_minus_two, x_minus_one, f_minus_two))[1]
+    x_final = _secant_step_loop(flux_surface, s, theta, phi, x_minus_two, x_minus_one, f_minus_two, n_iter)
     return x_final
 
 @eqx.filter_jit

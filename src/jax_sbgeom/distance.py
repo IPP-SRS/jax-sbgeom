@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import NamedTuple, Optional
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax_sbgeom.jax_utils.stationary import polish_stationary
@@ -40,9 +41,13 @@ class MinimumDistance(NamedTuple):
     converged : jnp.ndarray    # bool: Newton converged for the returned minimiser
 
 
+def _distance_at(xi, f, args):
+    return jnp.sqrt(2.0 * f(xi, args) + 1e-300)
+
+
 def _solve(f, starts, args, tol, max_steps):
     x, ok = polish_stationary(f, starts, args, tol=tol, max_steps=max_steps)
-    d = jax.vmap(lambda xi: jnp.sqrt(2.0 * f(xi, args) + 1e-300))(x)
+    d = eqx.filter_vmap(_distance_at, in_axes=(0, None, None))(x, f, args)
     best = jnp.argmin(jnp.where(ok, d, jnp.inf))
     best = jnp.where(ok.any(), best, jnp.argmin(d))
     return MinimumDistance(d[best], jax.lax.stop_gradient(jnp.mod(x[best], _TWO_PI)), ok[best])
@@ -51,7 +56,9 @@ def _solve(f, starts, args, tol, max_steps):
 def _closest_samples(points_a, points_b, k):
     """Indices of the k points of `a` closest to `b`, and the index of the nearest `b` point for each."""
     a, b = jax.lax.stop_gradient(points_a), jax.lax.stop_gradient(points_b)
-    d2 = jnp.sum((a[:, None, :] - b[None, :, :]) ** 2, axis=-1)
+    # |a|^2 + |b|^2 - 2 a.b, not sum((a_i - b_j)^2): under vmap the broadcast-difference reduction fuses into one GPU
+    # kernel that takes XLA ~65 s to compile (50 coil pairs), this form 2 s and runs 3x faster. Only used to rank starts.
+    d2 = jnp.sum(a * a, axis=-1)[:, None] + jnp.sum(b * b, axis=-1)[None, :] - 2.0 * (a @ b.T)
     top = jnp.argsort(jnp.min(d2, axis=1))[:k]
     return top, jnp.argmin(d2[top], axis=1)
 
@@ -61,6 +68,7 @@ def _curve_surface_f(x, args):
     return 0.5 * jnp.sum((curve.position(x[0] / _TWO_PI) - surface.cartesian_position(s, x[1], x[2])) ** 2)
 
 
+@eqx.filter_jit
 def minimum_distance(curve, surface, *, s : float = 1.0, n_curve : int = 256, n_theta : int = 60, n_phi : int = 100,
                      n_starts : int = 2, x0 : Optional[jnp.ndarray] = None, tol : float = 1e-10,
                      max_steps : int = 12) -> MinimumDistance:
@@ -95,6 +103,7 @@ def _curve_curve_f(x, args):
     return 0.5 * jnp.sum((a.position(x[0] / _TWO_PI) - b.position(x[1] / _TWO_PI)) ** 2)
 
 
+@eqx.filter_jit
 def minimum_distance_between_curves(curve_a, curve_b, *, n_curve : int = 256, n_starts : int = 2,
                                     x0 : Optional[jnp.ndarray] = None, tol : float = 1e-10,
                                     max_steps : int = 12) -> MinimumDistance:

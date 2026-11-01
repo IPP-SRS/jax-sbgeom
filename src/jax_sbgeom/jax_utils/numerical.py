@@ -260,8 +260,8 @@ def _pchip_derivatives(x, y):
     def edge_case(h0, h1, m0, m1):
         d = ((2 * h0 + h1) * m0 - h0 * m1) / (h0 + h1)
         # d is a scalar here!
-        d = jax.lax.cond(jnp.sign(d) != jnp.sign(m0), lambda d: 0.0, lambda d: d, d)
-        d = jax.lax.cond((jnp.sign(m0) != jnp.sign(m1)) & (jnp.abs(d) > jnp.abs(3 * m0)), lambda d: 3 * m0, lambda d: d, d)
+        d = jnp.where(jnp.sign(d) != jnp.sign(m0), 0.0, d)
+        d = jnp.where((jnp.sign(m0) != jnp.sign(m1)) & (jnp.abs(d) > jnp.abs(3 * m0)), 3 * m0, d)
         return jnp.array([d])
     
     d0 = edge_case(h[0], h[1], mk[0], mk[1])

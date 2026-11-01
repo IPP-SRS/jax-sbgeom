@@ -342,7 +342,7 @@ def periodic_bspline_2d(theta, phi, c: jnp.ndarray, k_theta: int, k_phi: int,
     scalar
         Value of the spline at (theta, phi).
     """
-    h = jax.vmap(lambda c_row: periodic_bspline(phi, c_row, k_phi, period_phi))(c)
+    h = eqx.filter_vmap(periodic_bspline, in_axes=(None, 0, None, None))(phi, c, k_phi, period_phi)
     return periodic_bspline(theta, h, k_theta, period_theta)
 
 @eqx.filter_jit

@@ -75,6 +75,13 @@ def _uniformity_loss(x : jnp.ndarray):
         ideal = 1.0 / (x.shape[1]-1)
         return jnp.sum(jnp.sum((dx - ideal)**2, axis=1))
 
+def _coil_repulsion(points, p, eps):
+    diff = points[:, None] - points[None, :]
+    dist = jnp.abs(diff) + jnp.eye(len(points)) * 1e6
+    rep = 1.0 / (dist**p + eps)
+    return jnp.sum(jnp.triu(rep, k=1))
+
+
 @jax.jit
 def _repulsion_loss(x : jnp.ndarray, p : int = 2, eps : float = 1e-6):
         '''
@@ -97,15 +104,9 @@ def _repulsion_loss(x : jnp.ndarray, p : int = 2, eps : float = 1e-6):
         loss: float
             Repulsion loss, lower is better
         '''
-        def coil_loss(points):        
-            diff = points[:, None] - points[None, :]
-            dist = jnp.abs(diff) + jnp.eye(len(points)) * 1e6
-            rep = 1.0 / (dist**p + eps)
-            return jnp.sum(jnp.triu(rep, k=1))
-
-        # vmap over coils, then sum    
-        losses = jax.vmap(coil_loss)(x)
-        losses_base = coil_loss(jnp.linspace(0.0,1.0, x.shape[1]))
+        # vmap over coils, then sum
+        losses = jax.vmap(_coil_repulsion, in_axes=(0, None, None))(x, p, eps)
+        losses_base = _coil_repulsion(jnp.linspace(0.0,1.0, x.shape[1]), p, eps)
         
         return jnp.sum(losses) / (losses.shape[0] * losses_base) - 1.0 
 
@@ -158,34 +159,10 @@ def coil_surface_loss(d_i : jnp.ndarray, coilset : CoilSet, n_coils : int, unifo
     total_s_array = _create_total_s(d_i, n_coils)
     return _coil_surface_distance_loss(total_s_array, coilset) + uniformity_loss_weight * _uniformity_loss(total_s_array) + repulsive_loss_weight * _repulsion_loss(total_s_array)
 
-def _create_coil_surface_loss_function(coilset : CoilSet, uniformity_penalty : float, repulsive_penalty : float):
-    '''
-    Create a coil surface loss function for optimization. It only depends on the d_i parameters.
-
-    Parameters
-    ----------
-    coilset : CoilSet
-        CoilSet containing the coils.
-    uniformity_penalty : float
-        Weight of the uniformity loss.
-    repulsive_penalty : float
-        Weight of the repulsion loss.
-    Returns
-    -------
-    loss_fn : function
-        Loss function that takes d_i parameters as input and returns the total coil surface loss.   
-    '''
-    
-    def loss_fn(params):
-        return coil_surface_loss(
-            params,
-            coilset,
-            coilset.n_coils,
-            uniformity_penalty,
-            repulsive_penalty
-        )
-    
-    return loss_fn
+def _coil_surface_loss_from_args(params, args):
+    '''Loss as a function of the d_i parameters only; args = (coilset, uniformity_penalty, repulsive_penalty).'''
+    coilset, uniformity_penalty, repulsive_penalty = args
+    return coil_surface_loss(params, coilset, coilset.n_coils, uniformity_penalty, repulsive_penalty)
 
 def optimize_coil_surface(coilset : CoilSet, uniformity_penalty : float = 1.0, repulsive_penalty : float = 0.1, n_samples_per_coil : int = 100, optimization_settings = OptimizationSettings(100,1e-4)): 
     '''
@@ -213,12 +190,12 @@ def optimize_coil_surface(coilset : CoilSet, uniformity_penalty : float = 1.0, r
 
     '''
     coilset_ordered_and_positive = ensure_coilset_rotation(order_coilset_phi(coilset), True)
-    loss_fn                      = _create_coil_surface_loss_function(coilset_ordered_and_positive, uniformity_penalty, repulsive_penalty)    
+    args                         = (coilset_ordered_and_positive, uniformity_penalty, repulsive_penalty)
     
     # Initialises with uniform spacing
     x0                           = jnp.ones(coilset.n_coils * n_samples_per_coil)        
     
-    return jax_sbgeom.jax_utils.optimize.run_optimization_lbfgs(x0, loss_fn, optimization_settings), coilset_ordered_and_positive
+    return jax_sbgeom.jax_utils.optimize.run_optimization_lbfgs(x0, _coil_surface_loss_from_args, optimization_settings, args), coilset_ordered_and_positive
     
 def _cws_fourier(positions_cws : jnp.ndarray, n_points_phi : int):
     '''

@@ -53,36 +53,50 @@ def run_lbfgs_step(params : optax.Params, opt_state : optax.OptState, loss_fn : 
     return params, opt_state
 
 
+_LBFGS = optax.lbfgs()      # stateless, one module-level instance
+
+
+def _call_loss(loss_fn, params, args):
+    return loss_fn(params) if args is None else loss_fn(params, args)
+
+
+def _lbfgs_continue(carry):
+    _, state, _, max_iterations, tolerance = carry
+    iter_num = optax.tree.get(state, 'count')
+    grad     = optax.tree.get(state, 'grad')
+    err      = optax.tree.norm(grad)
+    return (iter_num == 0) | ((iter_num < max_iterations) & (err >= tolerance))
+
+
+def _lbfgs_body(loss_fn, carry):
+    params, state, args, max_iterations, tolerance = carry
+    loss   = partial(_call_loss, loss_fn)
+    value, grad = optax.value_and_grad_from_state(loss)(params, args, state=state)
+    updates, state = _LBFGS.update(grad, state, params=params, value=value, grad=grad, value_fn=loss, args=args)
+    return optax.apply_updates(params, updates), state, args, max_iterations, tolerance
+
+
 @partial(jax.jit, static_argnums=(1, 2))
-def run_optimization_lbfgs(initial_values : optax.Params, loss_fn : Callable[[optax.Params], float], settings : OptimizationSettings):
+def run_optimization_lbfgs(initial_values : optax.Params, loss_fn : Callable[..., float], settings : OptimizationSettings, args=None):
     '''
-    Run L-BFGS optimization on a given loss function.
+    Minimise a loss with L-BFGS.
 
     Parameters
     ----------
     initial_values : optax.Params
         Initial parameters for optimization
-    loss_fn : Callable[[optax.Params], float]
-        Loss function to minimize
+    loss_fn : Callable
+        Loss function to minimize: loss_fn(params) or, if `args` is given, loss_fn(params, args). Static (jit): pass a
+        module-level function and put everything it needs in `args`, so that repeated calls hit the trace cache.
     settings : OptimizationSettings
         Settings for the optimization
+    args : pytree, optional
+        Traced data passed to loss_fn
     Returns
     -------
-    optax.Params
-        Optimized parameters
+    (optax.Params, optax.OptState)
+        Optimized parameters and the final optimizer state
     '''
-    lbfgs                   = optax.lbfgs()
-    value_and_grad_function = optax.value_and_grad_from_state(loss_fn)    
-    opt_state               = lbfgs.init(initial_values)
-    params                  = initial_values
-
-    def continuing_criterion(carry):
-        _, state = carry 
-        iter_num = optax.tree.get(state, 'count')
-        grad     = optax.tree.get(state, 'grad')
-        err      = optax.tree.norm(grad)
-        return (iter_num == 0) | ((iter_num < settings.max_iterations) & (err >= settings.tolerance))
-            
-    return jax.lax.while_loop(continuing_criterion, 
-        lambda carry: run_lbfgs_step(carry[0], carry[1], loss_fn, lbfgs, value_and_grad_function), 
-        (params, opt_state))
+    carry = (initial_values, _LBFGS.init(initial_values), args, jnp.asarray(settings.max_iterations), jnp.asarray(settings.tolerance))
+    params, state, _, _, _ = jax.lax.while_loop(_lbfgs_continue, partial(_lbfgs_body, loss_fn), carry)
+    return params, state

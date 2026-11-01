@@ -2,21 +2,37 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optimistix as optx
 
 
+def _grad_objective(x, packed):
+    """grad of f(x, args), with (f, args) packed into optimistix' `args` (module level: stable identity, so traces are cached)."""
+    f, args = packed
+    return jax.grad(f)(x, args)
+
+
+def _root_from(x0, f, args, solver, max_steps):
+    return optx.root_find(_grad_objective, solver, x0, args=(f, args), throw=False, max_steps=max_steps)
+
+
+@eqx.filter_jit
 def polish_stationary(f, starts, args=None, *, tol : float = 1e-10, max_steps : int = 12):
     """
     Newton-polish the stationary points of a smooth scalar f(x, args) from each row of `starts` (k, d).
     Sampling is the caller's job (it chooses the starts). Derivatives use optimistix' implicit adjoint.
 
+    `f` should be a module-level function and everything it needs a pytree in `args` (no closures: a fresh function
+    object per call defeats the trace cache). `args` may be any pytree (arrays are traced).
+
     Returns (x, converged): the polished points (k, d) and a boolean (k,). Where Newton did not converge x is the
     last iterate: still a valid point, but derivatives through it are not.
     """
     solver = optx.Newton(rtol=tol, atol=tol)
-    sol = jax.vmap(lambda x0: optx.root_find(jax.grad(f), solver, x0, args=args, throw=False, max_steps=max_steps))(starts)
+    sol = eqx.filter_vmap(_root_from, in_axes=(0, None, None, None, None))(starts, f, args, solver, max_steps)
     return sol.value, sol.result == optx.RESULTS.successful
 
 
