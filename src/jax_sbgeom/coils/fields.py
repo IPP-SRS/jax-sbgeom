@@ -44,7 +44,7 @@ def coil_elements(coils: CoilSet, n: int) -> tuple[jnp.ndarray, jnp.ndarray]:
 # ---------------------------------------------------------------------------------------------------------------------
 #  Filament field
 # ---------------------------------------------------------------------------------------------------------------------
-def filament_field(coils: CoilSet, currents: jnp.ndarray, points: jnp.ndarray, n: int = 256) -> jnp.ndarray:
+def filament_field(coils: CoilSet, currents: jnp.ndarray, points: jnp.ndarray, n: int) -> jnp.ndarray:
     '''
     Magnetic field of all coils as infinitely thin filaments (periodic trapezoid rule with n nodes per coil).
     The points must not lie on a coil (the field of a filament diverges there).
@@ -150,7 +150,7 @@ def regularised_field(points, xs, dl, current, eps2):
 
 
 def self_field(coil: FiniteSizeCoil, current: float, width: float, height: float, s: jnp.ndarray,
-               u: float = 0.0, v: float = 0.0, n_src: int = 1024) -> jnp.ndarray:
+               u: float, v: float, n_src: int) -> jnp.ndarray:
     '''
     Self field B_reg + B_0 + B_kappa + B_b of a rectangular-cross-section coil (Landreman & Hudson 2018) at the
     point (u, v) of the cross-section at each parameter s. Valid for cross-section dimensions small compared with the
@@ -193,8 +193,8 @@ def self_field(coil: FiniteSizeCoil, current: float, width: float, height: float
     return b_reg + b0 + bk + bb
 
 
-def max_force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: float, height: float, indices=None,
-                                  n_eval: int = 256, n_src: int = 1024, n_mut: int = 128) -> jnp.ndarray:
+def max_force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: float, height: float, indices: jnp.ndarray,
+                                  n_eval: int, n_src: int, n_mut: int) -> jnp.ndarray:
     '''
     Maximum of |I (T x B)| / (width * height) [N/m^3] over the selected coils and n_eval points on their centreline
     (the force on the current filament, spread over the cross-section). B is the regularised self field B_reg of the
@@ -208,15 +208,14 @@ def max_force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: 
     coils : CoilSet
     currents : jnp.ndarray [n_coils]
     width, height : float
-    indices : jnp.ndarray, optional
-        Coils to evaluate (default: all).
+    indices : jnp.ndarray
+        Coils to evaluate.
     n_eval, n_src, n_mut : int
         Evaluation points per coil, nodes of the self field, nodes of the other coils. The trapezoid rule converges
         geometrically: for the 50 Helias coils (closest approach about 1 m) n_mut = 64, 128, 256 gives relative errors of
         8e-5, 2e-7, 1e-12 against n_mut = 512. Closer coils need more nodes. The maximum is taken over the n_eval
         sampled points, so it is a lower bound of the true maximum (halving n_eval = 256 changed it by 1e-4).
     '''
-    indices = jnp.arange(coils.n_coils) if indices is None else indices
     _, delta = k_delta(width, height)
     consts = (coils, currents, coil_elements(coils, n_mut), jnp.arange(n_eval) / n_eval, delta * width * height, width * height)
     return jnp.max(jax.vmap(_force_one, in_axes=(0, None, None))(indices, consts, n_src))
@@ -233,8 +232,7 @@ def _force_one(i, consts, n_src):
 # ---------------------------------------------------------------------------------------------------------------------
 #  Inductance
 # ---------------------------------------------------------------------------------------------------------------------
-def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int | None = None, n_mut: int = 128,
-                      n_self: int = 1024) -> jnp.ndarray:
+def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int, n_mut: int, n_self: int) -> jnp.ndarray:
     '''
     Rows of the inductance matrix [H]. The off-diagonal entries are Neumann integrals
     L_ij = 1e-7 int int dl_i . dl_j / |x_i - x_j| (trapezoid rule, n_mut nodes). The diagonal uses the softened kernel
@@ -247,8 +245,9 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int |
     coils : CoilSet
     width, height : float
         Rectangular cross-section (all coils identical).
-    n_rows : int, optional
-        Only compute the rows of the first n_rows coils (default: all). Use for periodic coil sets.
+    n_rows : int
+        Only compute the rows of the first n_rows coils (all columns): n_rows = n_coils for the full matrix, fewer for
+        a periodic coil set (see `total_inductance`).
     n_mut, n_self : int
         Nodes per coil of the mutual and self terms. For the 50 Helias coils n_mut = 64, 128, 256 gives relative errors of
         7.6e-5, 2.6e-7, 1e-12 against n_mut = 512, and n_self = 128, 256 gives 1.1e-6, 4e-11 against 1024.
@@ -258,7 +257,6 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int |
     jnp.ndarray
         [n_rows, n_coils]
     '''
-    n_rows = coils.n_coils if n_rows is None else n_rows
     _, delta = k_delta(width, height)
     pos, dl = coil_elements(coils, n_mut)
     pos_s, dl_s = coil_elements(CoilSet(coils[:n_rows]), n_self)
@@ -280,12 +278,12 @@ def _inductance_row(i, consts):
     return jnp.where(jnp.arange(n_c) == i, own, jax.vmap(_mutual, in_axes=(0, None, None, None))(jnp.arange(n_c), i, pos, dl))
 
 
-def total_inductance(coils: CoilSet, width: float, height: float, n_rows: int | None = None, repeats: int = 1,
-                     n_mut: int = 128, n_self: int = 1024) -> jnp.ndarray:
+def total_inductance(coils: CoilSet, width: float, height: float, n_rows: int, n_mut: int, n_self: int) -> jnp.ndarray:
     '''
     Sum of all entries of the inductance matrix [H], i.e. the inductance of the coils connected in series (equal
-    currents). For a coil set invariant under a symmetry that maps the first n_rows coils onto all the others, pass
-    n_rows and repeats = n_coils / n_rows: the rows of the first n_rows coils are summed and multiplied by repeats.
-    See `inductance_matrix`.
+    currents). The first n_rows coils have to be mapped onto all the others by a symmetry of the coil set (n_rows
+    divides n_coils; n_rows = n_coils for no symmetry): the rows of the first n_rows coils are summed and multiplied by
+    n_coils / n_rows. See `inductance_matrix`.
     '''
-    return repeats * jnp.sum(inductance_matrix(coils, width, height, n_rows, n_mut, n_self))
+    assert coils.n_coils % n_rows == 0, "n_rows must divide the number of coils"
+    return (coils.n_coils // n_rows) * jnp.sum(inductance_matrix(coils, width, height, n_rows, n_mut, n_self))
