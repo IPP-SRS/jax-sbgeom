@@ -6,10 +6,6 @@ Filament fields use the periodic trapezoid rule on the analytic curve (spectrall
 
     Landreman & Hudson, "Magnetic fields of finite-cross-section coils" (2018): the regularised Biot-Savart integral
     (kernel softened by delta * a * b) plus local terms for the rectangular cross-section (equation numbers refer to the paper).
-
-Coils are a `CoilSet`. The orientation of the rectangular cross-section is the `finite_size_frame` of a
-`FiniteSizeCoil` / `FiniteSizeCoilSet`, so the user chooses the frame (`CentroidFrame`, `RotationMinimizedFrame`, ...).
-All quantities are SI and differentiable.
 '''
 from functools import partial
 
@@ -260,14 +256,13 @@ def _edge_one(consts, n_src, i):
 #  Inductance
 # ---------------------------------------------------------------------------------------------------------------------
 def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int | None = None, n_mut: int = 256,
-                      n_self: int = 1024, internal_term: bool = False) -> jnp.ndarray:
+                      n_self: int = 1024) -> jnp.ndarray:
     '''
     Rows of the inductance matrix [H]. The off-diagonal entries are Neumann integrals
     L_ij = 1e-7 int int dl_i . dl_j / |x_i - x_j| (trapezoid rule, n_mut nodes). The diagonal uses the softened kernel
     1 / sqrt(|x_i - x_j|^2 + delta * width * height) (n_self nodes). sqrt(delta * width * height) is the geometric mean
     distance of the cross-section, which already contains the internal inductance of a uniform current, so e.g. a ring
-    gives mu0 R (ln(8R/GMD) - 2). `internal_term=True` adds 1e-7 * length / 2 (mu0 R / 4 for a ring) on top, which
-    double counts it (this was done in the code this was ported from).
+    gives mu0 R (ln(8R/GMD) - 2).
 
     Parameters
     ----------
@@ -278,8 +273,6 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int |
         Only compute the rows of the first n_rows coils (default: all). Use for periodic coil sets.
     n_mut, n_self : int
         Nodes per coil of the mutual and self terms.
-    internal_term : bool
-        Add the internal inductance 1e-7 * length / 2 to the diagonal (default False, see above).
 
     Returns
     -------
@@ -291,7 +284,7 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int |
     pos, dl = coil_elements(coils, n_mut)
     pos_s, dl_s = coil_elements(CoilSet(coils[:n_rows]), n_self)
     consts = (pos, dl, pos_s, dl_s, delta * width * height)
-    return jax.lax.map(partial(_inductance_row, consts, internal_term), jnp.arange(n_rows))
+    return jax.lax.map(partial(_inductance_row, consts), jnp.arange(n_rows))
 
 
 def _mutual(j, i, pos, dl):
@@ -299,23 +292,21 @@ def _mutual(j, i, pos, dl):
     return 1e-7 * jnp.sum((dl[i] @ dl[j].T) / jnp.sqrt(jnp.where(d2 > 0, d2, 1.0)))
 
 
-def _inductance_row(consts, internal_term, i):
+def _inductance_row(consts, i):
     pos, dl, pos_s, dl_s, eps2 = consts
     x, d_ = pos_s[i], dl_s[i]
     d2 = jnp.sum((x[:, None] - x[None]) ** 2, -1) + eps2
     own = 1e-7 * jnp.sum((d_ @ d_.T) / jnp.sqrt(d2))
-    if internal_term:
-        own = own + 0.5e-7 * jnp.sum(jnp.linalg.norm(d_, axis=-1))
     n_c = pos.shape[0]
     return jnp.where(jnp.arange(n_c) == i, own, jax.vmap(_mutual, in_axes=(0, None, None, None))(jnp.arange(n_c), i, pos, dl))
 
 
 def total_inductance(coils: CoilSet, width: float, height: float, n_rows: int | None = None, repeats: int = 1,
-                     n_mut: int = 256, n_self: int = 1024, internal_term: bool = False) -> jnp.ndarray:
+                     n_mut: int = 256, n_self: int = 1024) -> jnp.ndarray:
     '''
     Sum of all entries of the inductance matrix [H], i.e. the inductance of the coils connected in series (equal
     currents). For a coil set invariant under a symmetry that maps the first n_rows coils onto all the others, pass
     n_rows and repeats = n_coils / n_rows: the rows of the first n_rows coils are summed and multiplied by repeats.
     See `inductance_matrix`.
     '''
-    return repeats * jnp.sum(inductance_matrix(coils, width, height, n_rows, n_mut, n_self, internal_term))
+    return repeats * jnp.sum(inductance_matrix(coils, width, height, n_rows, n_mut, n_self))

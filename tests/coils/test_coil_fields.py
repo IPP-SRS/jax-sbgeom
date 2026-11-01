@@ -175,8 +175,6 @@ def test_ring_inductance_analytic(R, w, h):
     L = float(total_inductance(stack(ring(R)), w, h, n_self=2048))
     expect = float(MU0 * R * (jnp.log(8 * R / (0.2235 * (w + h))) - 2.0))
     assert abs(L - expect) < 1e-3 * expect, (L, expect)
-    L_int = float(total_inductance(stack(ring(R)), w, h, n_self=2048, internal_term=True))
-    onp.testing.assert_allclose(L_int - L, MU0 * R / 4, rtol=1e-6)
 
 
 def test_ring_inductance_vs_filament_bundle():
