@@ -7,7 +7,6 @@ Filament fields use the periodic trapezoid rule on the analytic curve (spectrall
     Landreman & Hudson, "Magnetic fields of finite-cross-section coils" (2018): the regularised Biot-Savart integral
     (kernel softened by delta * a * b) plus local terms for the rectangular cross-section (equation numbers refer to the paper).
 '''
-from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -180,7 +179,7 @@ def self_field(coil: FiniteSizeCoil, current: float, width: float, height: float
         Field [M, 3]
     '''
     x, d1 = coil.position(s), coil.derivative(s)
-    d2 = jax.jvp(coil.derivative, (s,), (jnp.ones_like(s),))[1]
+    d2 = coil.second_derivative(s)
     speed = jnp.linalg.norm(d1, axis=-1, keepdims=True)
     T = d1 / speed
     kvec = (d2 - jnp.sum(d2 * T, -1, keepdims=True) * T) / speed ** 2         # dT/dl
@@ -194,11 +193,14 @@ def self_field(coil: FiniteSizeCoil, current: float, width: float, height: float
     return b_reg + b0 + bk + bb
 
 
-def max_force_density(coils: CoilSet, currents: jnp.ndarray, width: float, height: float, indices=None,
-                      n_eval: int = 256, n_src: int = 1024, n_mut: int = 256) -> jnp.ndarray:
+def max_force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: float, height: float, indices=None,
+                                  n_eval: int = 256, n_src: int = 1024, n_mut: int = 256) -> jnp.ndarray:
     '''
-    Maximum of |I (T x B)| / (width * height) [N/m^3] over the selected coils and n_eval points on their centreline.
-    B is the regularised self field B_reg of the coil plus the filament field of all other coils.
+    Maximum of |I (T x B)| / (width * height) [N/m^3] over the selected coils and n_eval points on their centreline
+    (the force on the current filament, spread over the cross-section). B is the regularised self field B_reg of the
+    coil (without the local cross-section terms of `self_field`) plus the filament field of all other coils.
+    All selected coils are evaluated at once (vmap): the transient memory is about
+    n_eval * (n_src + (n_coils - 1) * n_mut) * 24 bytes per coil.
 
     Parameters
     ----------
@@ -213,10 +215,10 @@ def max_force_density(coils: CoilSet, currents: jnp.ndarray, width: float, heigh
     indices = jnp.arange(coils.n_coils) if indices is None else indices
     _, delta = k_delta(width, height)
     consts = (coils, currents, coil_elements(coils, n_mut), jnp.arange(n_eval) / n_eval, delta * width * height, width * height)
-    return jnp.max(jax.lax.map(partial(_force_one, consts, n_src), indices))
+    return jnp.max(jax.vmap(_force_one, in_axes=(0, None, None))(indices, consts, n_src))
 
 
-def _force_one(consts, n_src, i):
+def _force_one(i, consts, n_src):
     coils, currents, (pos, dl_all), sn, eps2, area = consts
     c, j = coils[i], _others(currents.shape[0], i)
     x, (xs, dl) = c.position(sn), _nodes(c, n_src)
@@ -256,7 +258,7 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int |
     pos, dl = coil_elements(coils, n_mut)
     pos_s, dl_s = coil_elements(CoilSet(coils[:n_rows]), n_self)
     consts = (pos, dl, pos_s, dl_s, delta * width * height)
-    return jax.lax.map(partial(_inductance_row, consts), jnp.arange(n_rows))
+    return jax.vmap(_inductance_row, in_axes=(0, None))(jnp.arange(n_rows), consts)
 
 
 def _mutual(j, i, pos, dl):
@@ -264,7 +266,7 @@ def _mutual(j, i, pos, dl):
     return 1e-7 * jnp.sum((dl[i] @ dl[j].T) / jnp.sqrt(jnp.where(d2 > 0, d2, 1.0)))
 
 
-def _inductance_row(consts, i):
+def _inductance_row(i, consts):
     pos, dl, pos_s, dl_s, eps2 = consts
     x, d_ = pos_s[i], dl_s[i]
     d2 = jnp.sum((x[:, None] - x[None]) ** 2, -1) + eps2

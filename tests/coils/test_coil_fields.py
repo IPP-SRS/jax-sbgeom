@@ -7,7 +7,7 @@ import pytest
 from scipy.special import ellipk, ellipe
 
 from jax_sbgeom.coils import (FourierCoil, CoilSet, FiniteSizeCoil, CentroidFrame, filament_field, self_field,
-                              max_force_density, inductance_matrix, total_inductance)
+                              max_force_density_on_filament, inductance_matrix, total_inductance)
 from jax_sbgeom.coils.fields import MU0, _others
 
 jax.config.update("jax_enable_x64", True)
@@ -145,9 +145,9 @@ def test_max_force_density_mutual_part():
     field is the exact elliptic-integral one; B_reg(ring 0) (along z, azimuthally symmetric) is taken from the
     isolated-ring result, so this checks the combination and the exclusion of the own coil, not B_reg itself."""
     R, I, w, h, z1 = 3.0, 1e6, 0.1, 0.1, 1.0
-    f_iso = float(max_force_density(stack(ring(R)), jnp.array([I]), w, h, n_eval=4, n_src=1024))
+    f_iso = float(max_force_density_on_filament(stack(ring(R)), jnp.array([I]), w, h, n_eval=4, n_src=1024))
     bz_reg = f_iso * w * h / I
-    f = float(max_force_density(stack(ring(R), ring(2.0, (0, 0, z1))), jnp.array([I, I]), w, h, indices=jnp.array([0]),
+    f = float(max_force_density_on_filament(stack(ring(R), ring(2.0, (0, 0, z1))), jnp.array([I, I]), w, h, indices=jnp.array([0]),
                                 n_eval=4, n_src=1024, n_mut=512))
     brho, bz = loop_field_elliptic(I, 2.0, R, 0 - z1)
     expect = I / (w * h) * onp.hypot(bz_reg + bz, brho)
@@ -237,7 +237,7 @@ def test_gradients_vs_finite_differences():
     def f(c):
         co = FourierCoil(fourier_cos=cs2.coils.fourier_cos.at[1, 0, 0].set(c), fourier_sin=cs2.coils.fourier_sin, centre_i=cs2.coils.centre_i)
         co = CoilSet(co)
-        return max_force_density(co, jnp.array([1e5, 2e5]), 0.1, 0.07, n_eval=32, n_src=256, n_mut=64) + total_inductance(co, 0.1, 0.07, n_mut=64, n_self=256)
+        return max_force_density_on_filament(co, jnp.array([1e5, 2e5]), 0.1, 0.07, n_eval=32, n_src=256, n_mut=64) + total_inductance(co, 0.1, 0.07, n_mut=64, n_self=256)
     onp.testing.assert_allclose(jax.grad(f)(3.9), _fd(f, 3.9, 1e-5), rtol=1e-5)
 
 

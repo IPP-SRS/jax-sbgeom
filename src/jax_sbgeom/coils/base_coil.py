@@ -55,6 +55,11 @@ class Coil(ABC):
         s = jnp.asarray(s, dtype=float)
         return jax.jvp(self.position, (s,), (jnp.ones_like(s),))[1]
 
+    def second_derivative(self, s):
+        '''Second derivative d2x/ds2 (one more forward-mode pass of `derivative`). Returns an array of shape s.shape + (3,).'''
+        s = jnp.asarray(s, dtype=float)
+        return jax.jvp(self.derivative, (s,), (jnp.ones_like(s),))[1]
+
     def speed(self, s):
         '''
         Parametric speed |dx/ds| (s in [0, 1)). Integrating it over s gives the coil length, so
@@ -69,11 +74,8 @@ class Coil(ABC):
         Curvature kappa = |x' x x''| / |x'|^3 (1/m) of the space curve, independent of the
         parametrisation. Returns an array of the shape of s.
         '''
-        def curvature_single(si):
-            d1 = jax.jacfwd(self.position)(si)
-            d2 = jax.jacfwd(jax.jacfwd(self.position))(si)
-            return jnp.linalg.norm(jnp.cross(d1, d2), axis=-1) / jnp.linalg.norm(d1, axis=-1) ** 3
-        return jnp.vectorize(curvature_single, signature='()->()')(jnp.asarray(s, dtype=float))
+        d1, d2 = self.derivative(s), self.second_derivative(s)
+        return jnp.linalg.norm(jnp.cross(d1, d2), axis=-1) / jnp.linalg.norm(d1, axis=-1) ** 3
 
     def _default_length_samples(self):
         return 1024
