@@ -212,9 +212,10 @@ def max_force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: 
         Coils to evaluate.
     n_eval, n_src, n_mut : int
         Evaluation points per coil, nodes of the self field, nodes of the other coils. The trapezoid rule converges
-        geometrically: for the 50 Helias coils (closest approach about 1 m) n_mut = 64, 128, 256 gives relative errors of
-        8e-5, 2e-7, 1e-12 against n_mut = 512. Closer coils need more nodes. The maximum is taken over the n_eval
-        sampled points, so it is a lower bound of the true maximum (halving n_eval = 256 changed it by 1e-4).
+        geometrically in n_mut, at a rate set by the closest approach of two coils: for the 50 Helias5 coils (closest
+        approach 0.96 m, 10 coils evaluated) n_mut = 64, 128, 256 has relative errors of 1.4e-3, 1.4e-5, 1.2e-9 against
+        n_mut = 512, and n_src = 256 differs by 6e-7 from 1024. The maximum is taken over the n_eval sampled points, so it
+        is a lower bound of the true maximum: n_eval = 128, 256 differ by 1.2e-3, 1.8e-4 from 1024.
     '''
     _, delta = k_delta(width, height)
     consts = (coils, currents, coil_elements(coils, n_mut), jnp.arange(n_eval) / n_eval, delta * width * height, width * height)
@@ -249,8 +250,8 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int, 
         Only compute the rows of the first n_rows coils (all columns): n_rows = n_coils for the full matrix, fewer for
         a periodic coil set (see `total_inductance`).
     n_mut, n_self : int
-        Nodes per coil of the mutual and self terms. For the 50 Helias coils n_mut = 64, 128, 256 gives relative errors of
-        7.6e-5, 2.6e-7, 1e-12 against n_mut = 512, and n_self = 128, 256 gives 1.1e-6, 4e-11 against 1024.
+        Nodes per coil of the mutual and self terms. For the 50 Helias5 coils (10 rows) n_mut = 128, 256 has relative
+        errors of 7e-8, 2e-12 against n_mut = 512 (not monotone below: 8e-5 at 96); n_self was not studied there.
 
     Returns
     -------
