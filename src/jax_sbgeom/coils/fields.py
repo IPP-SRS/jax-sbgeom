@@ -48,7 +48,7 @@ def coil_elements(coils: CoilSet, n: int) -> tuple[jnp.ndarray, jnp.ndarray]:
 # ---------------------------------------------------------------------------------------------------------------------
 #  Filament field
 # ---------------------------------------------------------------------------------------------------------------------
-def filament_field(coils: CoilSet, currents: jnp.ndarray, points: jnp.ndarray, n: int, batch_size: int) -> jnp.ndarray:
+def filament_field(coils: CoilSet, currents: jnp.ndarray, points: jnp.ndarray, n: int, batch_size: int = 64) -> jnp.ndarray:
     '''
     Magnetic field of all coils as infinitely thin filaments (periodic trapezoid rule with n nodes per coil).
     The points must not lie on a coil (the field of a filament diverges there).
@@ -63,7 +63,7 @@ def filament_field(coils: CoilSet, currents: jnp.ndarray, points: jnp.ndarray, n
     n : int
         Number of nodes per coil.
     batch_size : int
-        Points per chunk (static), see `biot_savart`.
+        Points per chunk (static), see `biot_savart` (default 64).
 
     Returns
     -------
@@ -242,7 +242,7 @@ def force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: floa
 # ---------------------------------------------------------------------------------------------------------------------
 @partial(jax.jit, static_argnames=("n_rows", "n_mut", "n_self", "batch_size"))
 def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int, n_mut: int, n_self: int,
-                      batch_size: int) -> jnp.ndarray:
+                      batch_size: int = 2) -> jnp.ndarray:
     '''
     Rows of the inductance matrix [H]. The off-diagonal entries are Neumann integrals
     L_ij = 1e-7 int int dl_i . dl_j / |x_i - x_j| (trapezoid rule, n_mut nodes). The diagonal uses the softened kernel
@@ -262,7 +262,7 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int, 
         Nodes per coil of the mutual and self terms. For the 50 Helias5 coils (10 rows) n_mut = 128, 256 has relative
         errors of 7e-8, 2e-12 against n_mut = 512 (not monotone below: 8e-5 at 96); n_self was not studied there.
     batch_size : int
-        Rows per chunk (static, see `map_chunked`; n_rows: all rows at once). Transient memory grows linearly with it: 50
+        Rows per chunk (static, see `map_chunked`; n_rows: all rows at once; default 2, the fastest of 1, 2, 5, 10 on the Helias5 coils: 55 ms forward against 142 ms at 10). Transient memory grows linearly with it: 50
         Helias5 coils, n_mut = 128, n_self = 1024: batch_size 1 needs 20 MiB forward and 95 MiB for the gradient, batch_size
         10 needs 188 and 655 MiB (compiled, CPU).
 
@@ -293,7 +293,7 @@ def _inductance_row(i, consts):
 
 
 def total_inductance(coils: CoilSet, width: float, height: float, n_rows: int, n_mut: int, n_self: int,
-                     batch_size: int) -> jnp.ndarray:
+                     batch_size: int = 2) -> jnp.ndarray:
     '''
     Sum of all entries of the inductance matrix [H], i.e. the inductance of the coils connected in series (equal
     currents). The first n_rows coils have to be mapped onto all the others by a symmetry of the coil set (n_rows

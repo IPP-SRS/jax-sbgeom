@@ -76,7 +76,7 @@ def _field_at_point_consts(x, consts):
 
 
 @partial(jax.jit, static_argnums = (4,))
-def biot_savart(currents : jnp.ndarray, positions : jnp.ndarray, delta_line_segments : jnp.ndarray, query_points : jnp.ndarray, batch_size : int):
+def biot_savart(currents : jnp.ndarray, positions : jnp.ndarray, delta_line_segments : jnp.ndarray, query_points : jnp.ndarray, batch_size : int = 64):
     '''
     Biot-Savart law for multiple line elements and multiple query points
 
@@ -95,7 +95,7 @@ def biot_savart(currents : jnp.ndarray, positions : jnp.ndarray, delta_line_segm
     query_points : jnp.ndarray
         Points at which to evaluate the field [M, 3]
     batch_size : int
-        Query points per chunk (static, see `map_chunked`; M: all at once). Transient memory is about 1 (forward) and 9
+        Query points per chunk (static, see `map_chunked`; M: all at once; default 64: for N = 12800 the gradient needs 57 MiB at 64, and its time is the same at 64 and 256). Transient memory is about 1 (forward) and 9
         (gradient) arrays of batch_size * N * 8 bytes (N = 12800, compiled, CPU).
 
     Returns
