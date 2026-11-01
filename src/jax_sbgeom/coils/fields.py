@@ -8,11 +8,8 @@ Filament fields use the periodic trapezoid rule on the analytic curve (spectrall
     (kernel softened by delta * a * b) plus local terms for the rectangular cross-section (equation numbers refer to the paper).
 '''
 
-from functools import partial
-
 import jax
 import jax.numpy as jnp
-from jax_sbgeom.jax_utils.stationary import Polish, maximise_periodic
 from .base_coil import FiniteSizeCoil
 from .biot_savart import biot_savart, Constant
 from .coilset import CoilSet
@@ -171,7 +168,7 @@ def self_field(coil: FiniteSizeCoil, current: float, width: float, height: float
         Evaluation parameters [M]
     u, v : float
         Position in the cross-section in units of half the width/height, u along p and v along q, in [-1, 1].
-        (u, v) = (0, 0) is the centre; u = -1 is the edge at -p (for `CentroidFrame` the side facing the centre).
+        (u, v) = (0, 0) is the centre.
     n_src : int
         Trapezoid nodes of the B_reg integral. The kernel scale is sqrt(delta * width * height), so n_src has to
         resolve that (converges spectrally beyond roughly length / scale).
@@ -181,66 +178,56 @@ def self_field(coil: FiniteSizeCoil, current: float, width: float, height: float
     jnp.ndarray
         Field [M, 3]
     '''
-    x, d1 = coil.position(s), coil.derivative(s)
+    x  = coil.position(s)
+    d1 = coil.derivative(s)
     d2 = coil.second_derivative(s)
+
     speed = jnp.linalg.norm(d1, axis=-1, keepdims=True)
+
     T = d1 / speed
-    kvec = (d2 - jnp.sum(d2 * T, -1, keepdims=True) * T) / speed ** 2         # dT/dl
-    p, q = jnp.moveaxis(coil.finite_size_frame(s), -2, 0)
-    xs, dl = _nodes(coil, n_src)
+
+    kvec     = (d2 - jnp.sum(d2 * T, -1, keepdims=True) * T) / speed ** 2         # dT/dl
+    p, q     = jnp.moveaxis(coil.finite_size_frame(s), -2, 0)
+    xs, dl   = _nodes(coil, n_src)
     _, delta = k_delta(width, height)
     b_reg = regularised_field(x, xs, dl, current, delta * width * height)
-    b0 = _b0(u, v, width, height, p, q, current)
-    bk = _bkappa(u, v, width, height, p, q, current, jnp.sum(kvec * p, -1), jnp.sum(kvec * q, -1))
-    bb = MU0 * current / (8.0 * jnp.pi) * jnp.cross(T, kvec) * (4.0 + 2.0 * jnp.log(2.0) + jnp.log(delta))
+    b0    = _b0(u, v, width, height, p, q, current)
+    bk    = _bkappa(u, v, width, height, p, q, current, jnp.sum(kvec * p, -1), jnp.sum(kvec * q, -1))
+    bb    = MU0 * current / (8.0 * jnp.pi) * jnp.cross(T, kvec) * (4.0 + 2.0 * jnp.log(2.0) + jnp.log(delta))
     return b_reg + b0 + bk + bb
 
 
-def max_force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: float, height: float, indices: jnp.ndarray,
-                                  n_eval: int, n_src: int, n_mut: int, polish: Polish | None) -> jnp.ndarray:
+def force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: float, height: float, i: int, s: float,
+                              n_src: int, n_mut: int) -> jnp.ndarray:
     '''
-    Maximum of |I (T x B)| / (width * height) [N/m^3] over the selected coils and n_eval points on their centreline
-    (the force on the current filament, spread over the cross-section). B is the regularised self field B_reg of the
-    coil (without the local cross-section terms of `self_field`) plus the filament field of all other coils.
-    All selected coils are evaluated at once (vmap): the transient memory is about
-    n_eval * (n_src + (n_coils - 1) * n_mut) * 48 bytes per coil (measured for 50 coils with n_mut = 256: 8.3 GB all
-    at once, 0.17 GB one at a time).
+    |I (T x B)| / (width * height) [N/m^3] at the parameter s of coil i: the force on the current filament, spread over the
+    cross-section. B is the regularised self field B_reg of the coil (without the local cross-section terms of
+    `self_field`) plus the filament field of all other coils. The maximum over s is the caller's: see `maximise_periodic`.
 
     Parameters
     ----------
     coils : CoilSet
     currents : jnp.ndarray [n_coils]
     width, height : float
-    indices : jnp.ndarray
-        Coils to evaluate.
-    n_eval, n_src, n_mut : int
-        Evaluation points per coil, nodes of the self field, nodes of the other coils. The trapezoid rule converges
-        geometrically in n_mut, at a rate set by the closest approach of two coils: for the 50 Helias5 coils (closest
-        approach 0.96 m, 10 coils evaluated) n_mut = 64, 128, 256 has relative errors of 1.4e-3, 1.4e-5, 1.2e-9 against
-        n_mut = 512, and n_src = 256 differs by 6e-7 from 1024. The maximum is taken over the n_eval sampled points, so it
-        is a lower bound of the true maximum: n_eval = 128, 256 differ by 1.2e-3, 1.8e-4 from 1024.
-    polish : Polish | None
-        None: the maximum over the samples. Polish(tol, max_steps): the best sample of every coil is polished by Newton
-        on the stationary condition in s (`maximise_periodic`), so the result is never below the sampled maximum and is
-        accurate to the quadrature error instead of the sampling error (coil 3 of Helias5, n_eval = 256: +6.6e-5). Newton
-        refines the best sample's own maximum, so n_eval must still be large enough to pick the right one.
+    i : int
+        Coil index.
+    s : float
+        Curve parameter in [0, 1).
+    n_src, n_mut : int
+        Nodes of the self field, nodes of each of the other coils. The trapezoid rule converges geometrically in both, at
+        a rate set by the closest approach of two coils: for the 50 Helias5 coils (closest approach 0.96 m, 10 coils
+        evaluated) n_mut = 64, 128, 256 has relative errors of 1.4e-3, 1.4e-5, 1.2e-9 against n_mut = 512 and
+        n_src = 256 differs by 6e-7 from 1024. The cost of one evaluation is (n_src + (n_coils - 1) * n_mut) pairs of
+        nodes and points (48 bytes of transient memory each). The nodes do not depend on s, so jit and vmap over s compute
+        them once (measured on Helias5: passing them in precomputed is not faster).
     '''
     _, delta = k_delta(width, height)
-    consts = (coils, currents, coil_elements(coils, n_mut), delta * width * height, width * height)
-    return jnp.max(jax.vmap(partial(_force_one, n_src=n_src, n_eval=n_eval, polish=polish), in_axes=(0, None))(indices, consts))
-
-
-def _force_one(i, consts, n_src, n_eval, polish):
-    return maximise_periodic(_force_at, (i, consts, n_src), n_eval, polish)
-
-
-def _force_at(s, args):
-    '''|I (T x B)| / area at the parameter s of coil i.'''
-    i, (coils, currents, (pos, dl_all), eps2, area), n_src = args
+    pos, dl_all = coil_elements(coils, n_mut)
     c, j = coils[i], _others(currents.shape[0], i)
-    x, (xs, dl) = c.position(jnp.reshape(s, (1,))), _nodes(c, n_src)
-    b = regularised_field(x, xs, dl, currents[i], eps2) + _field_of_nodes(pos[j], dl_all[j], currents[j], x)
-    return jnp.linalg.norm(currents[i] * jnp.cross(c.tangent(jnp.reshape(s, (1,))), b) / area, axis=-1)[0]
+    sv = jnp.reshape(s, (1,))
+    x, (xs, dl) = c.position(sv), _nodes(c, n_src)
+    b = regularised_field(x, xs, dl, currents[i], delta * width * height) + _field_of_nodes(pos[j], dl_all[j], currents[j], x)
+    return (jnp.linalg.norm(currents[i] * jnp.cross(c.tangent(sv), b), axis=-1) / (width * height))[0]
 
 
 # ---------------------------------------------------------------------------------------------------------------------

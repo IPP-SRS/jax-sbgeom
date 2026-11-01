@@ -7,8 +7,8 @@ import pytest
 from scipy.special import ellipk, ellipe
 
 from jax_sbgeom.coils import (FourierCoil, CoilSet, FiniteSizeCoil, CentroidFrame, filament_field, self_field,
-                              max_force_density_on_filament, inductance_matrix, total_inductance)
-from jax_sbgeom.jax_utils.stationary import Polish
+                              force_density_on_filament, inductance_matrix, total_inductance)
+from jax_sbgeom.jax_utils.stationary import Polish, maximise_periodic
 from jax_sbgeom.coils.fields import MU0, _others
 
 jax.config.update("jax_enable_x64", True)
@@ -141,15 +141,27 @@ def test_self_field_convergence_n_src_and_spectral_in_n_eval():
     assert spec[30:].max() < 1e-12 * spec.max()
 
 
-def test_max_force_density_mutual_part():
+def fd(cs, cur, w, h, i, s, n_src, n_mut):
+    return force_density_on_filament(cs, cur, w, h, i, s, n_src, n_mut)
+
+
+def _fd_at(s, args):
+    cs, cur, w, h, i, n_src, n_mut = args
+    return force_density_on_filament(cs, cur, w, h, i, s, n_src, n_mut)
+
+
+def max_fd(cs, cur, w, h, n_eval, n_src, n_mut, polish):                 # how a caller takes the maximum over s and coils
+    return jnp.max(jnp.stack([maximise_periodic(_fd_at, (cs, cur, w, h, i, n_src, n_mut), n_eval, polish) for i in range(cs.n_coils)]))
+
+
+def test_force_density_mutual_part():
     """Two coaxial rings (current I each): |I T x B|/(w h) on ring 0 with B = B_reg(ring 0) + B(ring 1). The ring-1
     field is the exact elliptic-integral one; B_reg(ring 0) (along z, azimuthally symmetric) is taken from the
     isolated-ring result, so this checks the combination and the exclusion of the own coil, not B_reg itself."""
     R, I, w, h, z1 = 3.0, 1e6, 0.1, 0.1, 1.0
-    f_iso = float(max_force_density_on_filament(stack(ring(R)), jnp.array([I]), w, h, jnp.arange(1), n_eval=4, n_src=1024, n_mut=128, polish=None))
+    f_iso = float(fd(stack(ring(R)), jnp.array([I]), w, h, 0, 0.0, 1024, 128))
     bz_reg = f_iso * w * h / I
-    f = float(max_force_density_on_filament(stack(ring(R), ring(2.0, (0, 0, z1))), jnp.array([I, I]), w, h, jnp.array([0]),
-                                n_eval=4, n_src=1024, n_mut=512, polish=None))
+    f = float(fd(stack(ring(R), ring(2.0, (0, 0, z1))), jnp.array([I, I]), w, h, 0, 0.0, 1024, 512))
     brho, bz = loop_field_elliptic(I, 2.0, R, 0 - z1)
     expect = I / (w * h) * onp.hypot(bz_reg + bz, brho)
     onp.testing.assert_allclose(f, expect, rtol=1e-8)
@@ -238,22 +250,22 @@ def test_gradients_vs_finite_differences():
     def f(c):
         co = FourierCoil(fourier_cos=cs2.coils.fourier_cos.at[1, 0, 0].set(c), fourier_sin=cs2.coils.fourier_sin, centre_i=cs2.coils.centre_i)
         co = CoilSet(co)
-        return max_force_density_on_filament(co, jnp.array([1e5, 2e5]), 0.1, 0.07, jnp.arange(2), n_eval=32, n_src=256, n_mut=64, polish=None) + total_inductance(co, 0.1, 0.07, n_rows=2, n_mut=64, n_self=256)
+        return fd(co, jnp.array([1e5, 2e5]), 0.1, 0.07, 1, 0.3, 256, 64) + total_inductance(co, 0.1, 0.07, n_rows=2, n_mut=64, n_self=256)
     onp.testing.assert_allclose(jax.grad(f)(3.9), _fd(f, 3.9, 1e-5), rtol=1e-5)
 
     def f(c):                                                  # the polished maximum: exact gradient by the envelope theorem
         co = FourierCoil(fourier_cos=cs2.coils.fourier_cos.at[1, 0, 0].set(c), fourier_sin=cs2.coils.fourier_sin, centre_i=cs2.coils.centre_i)
-        return max_force_density_on_filament(CoilSet(co), jnp.array([1e5, 2e5]), 0.3, 0.2, jnp.arange(2), n_eval=24, n_src=1024, n_mut=64, polish=Polish(1e-10, 12))
+        return max_fd(CoilSet(co), jnp.array([1e5, 2e5]), 0.3, 0.2, 24, 1024, 64, Polish(1e-10, 12))
     onp.testing.assert_allclose(jax.grad(f)(3.9), _fd(f, 3.9, 1e-5), rtol=1e-5)
 
 
-def test_polished_force_density_is_the_dense_maximum():
+def test_polished_maximum_of_the_force_density_is_the_dense_maximum():
     cs2 = stack(wavy(), wavy(1.3))
     cur = jnp.array([1e5, 2e5])
-    args = (cs2, cur, 0.3, 0.2, jnp.arange(2))               # a wide cross-section: a smooth force density, resolved by 24 samples
-    sampled = float(max_force_density_on_filament(*args, 24, 1024, 64, None))
-    polished = float(max_force_density_on_filament(*args, 24, 1024, 64, Polish(1e-10, 12)))
-    dense = float(max_force_density_on_filament(*args, 4096, 1024, 64, None))
+    args = (cs2, cur, 0.3, 0.2)                              # a wide cross-section: a smooth force density, resolved by 24 samples
+    sampled = float(max_fd(*args, 24, 1024, 64, None))
+    polished = float(max_fd(*args, 24, 1024, 64, Polish(1e-10, 12)))
+    dense = float(max_fd(*args, 4096, 1024, 64, None))
     assert sampled < polished and polished >= dense * (1 - 1e-9) and polished <= dense * (1 + 1e-9)
 
 
