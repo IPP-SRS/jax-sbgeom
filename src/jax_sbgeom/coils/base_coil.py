@@ -45,6 +45,16 @@ class Coil(ABC):
     #  mode), so they are exact for smooth coils (FourierCoil); classes whose `position` is not
     #  smooth override them (DiscreteCoil).
     # ------------------------------------------------------------------------------------------
+    def derivative(self, s):
+        '''
+        Derivative dx/ds of the position with respect to the normalised arc length s (not normalised, unlike `tangent`).
+        `position` acts pointwise on s, so one forward-mode pass gives the derivative at every s.
+
+        Returns an array of shape s.shape + (3,).
+        '''
+        s = jnp.asarray(s, dtype=float)
+        return jax.jvp(self.position, (s,), (jnp.ones_like(s),))[1]
+
     def speed(self, s):
         '''
         Parametric speed |dx/ds| (s in [0, 1)). Integrating it over s gives the coil length, so
@@ -52,9 +62,7 @@ class Coil(ABC):
 
         Returns an array of the shape of s.
         '''
-        def speed_single(si):
-            return jnp.linalg.norm(jax.jacfwd(self.position)(si), axis=-1)
-        return jnp.vectorize(speed_single, signature='()->()')(jnp.asarray(s, dtype=float))
+        return jnp.linalg.norm(self.derivative(s), axis=-1)
 
     def curvature(self, s):
         '''

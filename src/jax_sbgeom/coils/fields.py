@@ -21,7 +21,7 @@ MU0 = Constant.MU_0
 def _nodes(coil, n: int) -> tuple[jnp.ndarray, jnp.ndarray]:
     '''Positions x(s_i) and line elements dl_i = x'(s_i) / n [n, 3] of n equally spaced nodes of one coil.'''
     s = jnp.arange(n) / n
-    return jax.vmap(coil.position)(s), jax.vmap(jax.jacfwd(coil.position))(s) / n
+    return coil.position(s), coil.derivative(s) / n
 
 
 def coil_elements(coils: CoilSet, n: int) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -179,7 +179,8 @@ def self_field(coil: FiniteSizeCoil, current: float, width: float, height: float
     jnp.ndarray
         Field [M, 3]
     '''
-    x, d1, d2 = (jax.vmap(f)(s) for f in (coil.position, jax.jacfwd(coil.position), jax.jacfwd(jax.jacfwd(coil.position))))
+    x, d1 = coil.position(s), coil.derivative(s)
+    d2 = jax.jvp(coil.derivative, (s,), (jnp.ones_like(s),))[1]
     speed = jnp.linalg.norm(d1, axis=-1, keepdims=True)
     T = d1 / speed
     kvec = (d2 - jnp.sum(d2 * T, -1, keepdims=True) * T) / speed ** 2         # dT/dl
