@@ -18,7 +18,7 @@ Key features:
 - BVH construction, ray-BVH traversal and shortest distances to mesh for flux surface fitting
 - Spline interpolations
 
-For a showcase of some of these features, see T.J. Bogaarts and F. Warmer (paper forthcoming). Alternatively, the examples reproduce exactly the figures given in the paper.
+For a showcase of some of these features, see [T.J. Bogaarts and F. Warmer](https://iopscience.iop.org/article/10.1088/1741-4326/ae4e48/meta). The examples reproduce exactly the figures given in the paper.
 
 # Installation
 
@@ -53,13 +53,6 @@ cd moab
 SKBUILD_CMAKE_ARGS="-DENABLE_HDF5=ON;-DHDF5_DIR=$CONDA_PREFIX" pip install .
 ```
 
-# Making a release
-
-Versioning is handled by `setuptools_scm` from git tags, and publishing to PyPI is automated:
-
-1. Make sure `main` is green (tests + docs workflows passing).
-2. Create a GitHub Release with a new tag of the form `vX.Y.Z` (e.g. via `gh release create vX.Y.Z --generate-notes`, or through the GitHub UI). Tagging `main` directly without a Release will *not* trigger a publish.
-3. Publishing the Release triggers `.github/workflows/publish.yml`, which builds the sdist/wheel and uploads them to PyPI via trusted publishing (no token needed).
 
 
 
