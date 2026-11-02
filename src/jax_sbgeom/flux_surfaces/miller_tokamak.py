@@ -32,13 +32,20 @@ class MillerTokamak(ParametrisedSurface):
 import jax
 from jax_sbgeom.jax_utils import stack_jacfwd
 
+def _miller_cartesian(surface, s, theta, phi):
+    return surface.cartesian_position(s, theta, phi)
+
+# stack_jacfwd factories executed once, at import time (module-level objects with stable identity)
+_dx_dtheta_dphi_vec = jnp.vectorize(stack_jacfwd(_miller_cartesian, argnums=(2, 3)), excluded=(0,), signature='(),(),()->(3,2)')
+_second_derivatives_vec = jnp.vectorize(stack_jacfwd(stack_jacfwd(_miller_cartesian, argnums=(2, 3)), argnums=(2, 3)), excluded=(0,), signature='(),(),()->(3,2,2)')
+
 @eqx.filter_jit
 def _dx_dtheta_dphi_miller(self, s, theta, phi):
-    return  jnp.vectorize(stack_jacfwd(self.cartesian_position, argnums=(1,2)), excluded=(), signature='(),(),()->(3,2)')(s, theta, phi)
+    return _dx_dtheta_dphi_vec(self, s, theta, phi)
 
 @eqx.filter_jit
 def _second_derivatives_miller(self, s, theta, phi):
-    return jax.jit(jnp.vectorize(stack_jacfwd(stack_jacfwd(self.cartesian_position, argnums=(1,2)), argnums=(1,2)), excluded=(), signature='(),(),()->(3,2,2)'))(s, theta, phi)
+    return _second_derivatives_vec(self, s, theta, phi)
 
 @eqx.filter_jit
 def normal_miller(self, s, theta, phi):

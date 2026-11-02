@@ -60,30 +60,18 @@ def _build_closed_strip(n_strip : int, offset_index_0 : int, offset_index_1 : in
     top_right    = ((u_i_block + 1) % n_strip ) * stride_1 + offset_index_1
     
 
-    def infacing_normals(x):
-        return jnp.stack([
-            top_left,
-            bottom_left,
-            bottom_right,            
-        ], axis=-1), jnp.stack([            
-            top_right,
-            top_left,
-            bottom_right,
-        ], axis=-1)
-    def outfacing_normals(x):
-        return jnp.stack([
-            bottom_left,
-            top_left,
-            bottom_right,                        
-        ], axis=-1), jnp.stack([                       
-            top_left,
-            top_right,
-            bottom_right,
-        ], axis=-1) 
-    
-    tri1, tri2 = jax.lax.cond(normals_orientation, outfacing_normals, infacing_normals, operand=None)
+    tri1_out, tri2_out = _strip_triangles_out(bottom_left, bottom_right, top_left, top_right)
+    tri1_in,  tri2_in  = _strip_triangles_in(bottom_left, bottom_right, top_left, top_right)
+    tri1 = jnp.where(normals_orientation, tri1_out, tri1_in)
+    tri2 = jnp.where(normals_orientation, tri2_out, tri2_in)
     triangles = jnp.stack([tri1, tri2],axis=-2) # last axis is vertices, second last is triangle index (0 or 1)    
     return triangles
+
+def _strip_triangles_in(bottom_left, bottom_right, top_left, top_right):
+    return jnp.stack([top_left, bottom_left, bottom_right], axis=-1), jnp.stack([top_right, top_left, bottom_right], axis=-1)
+
+def _strip_triangles_out(bottom_left, bottom_right, top_left, top_right):
+    return jnp.stack([bottom_left, top_left, bottom_right], axis=-1), jnp.stack([top_left, top_right, bottom_right], axis=-1)
 
 def _build_open_strip(n_strip : int, offset_index_0 : int, offset_index_1 : int, normals_orientation : bool, stride_0: int, stride_1 : int):
     return _build_closed_strip(n_strip, offset_index_0, offset_index_1, normals_orientation, stride_0, stride_1)[:-1, ...]
@@ -115,19 +103,7 @@ def _build_closed_wedges(n_wedge : int, offset_index_0 : int, offset_index_1 : i
     wedge_1    = u_i_block * stride_1 + offset_index_1
     wedge_2    = ( (u_i_block + 1) % n_wedge ) * stride_1 + offset_index_1
 
-    def infacing_normals(x):
-        return jnp.stack([
-            wedge_1,
-            center,
-            wedge_2,            
-        ], axis=-1)
-    def outfacing_normals(x):
-        return jnp.stack([
-            center,
-            wedge_1,
-            wedge_2,                        
-        ], axis=-1)
-    triangles = jax.lax.cond(normals_orientation, outfacing_normals, infacing_normals, operand=None)
+    triangles = jnp.where(normals_orientation, jnp.stack([center, wedge_1, wedge_2], axis=-1), jnp.stack([wedge_1, center, wedge_2], axis=-1))
     return triangles
 
 
@@ -213,6 +189,10 @@ def _build_open_triangle_surface(n_theta : int, n_phi :int, normals_orientation 
     return jnp.moveaxis(triangles_shaped, 0,1).reshape(-1,3) # Move triangle index to first axis so we have triangle order first in phi.
 
 
+def _phi_grid(phi_start, phi_end, full_angle, n_phi : int):
+    '''n_phi toroidal angles from phi_start to phi_end; the end point is excluded for the full angle (periodic).'''
+    return jnp.where(full_angle, jnp.linspace(phi_start, phi_end, n_phi, endpoint=False), jnp.linspace(phi_start, phi_end, n_phi, endpoint=True))
+
 def _mesh_surface_points(flux_surfaces : ParametrisedSurface, s : float, phi_start : float, phi_end : bool, full_angle : bool,  n_theta : int, n_phi : int):
     '''
     Obtain the mesh points on a flux surface at normalized radius s with n_theta poloidal and n_phi toroidal points
@@ -240,9 +220,7 @@ def _mesh_surface_points(flux_surfaces : ParametrisedSurface, s : float, phi_sta
         An array of shape (n_points, 3) containing the Cartesian coordinates of the mesh points.    
     '''
     theta = jnp.linspace(0, 2 * jnp.pi, n_theta, endpoint=False)
-    phi   = jax.lax.cond(full_angle, lambda _ : jnp.linspace(phi_start, phi_end, n_phi, endpoint=False),
-                                        lambda _ :jnp.linspace(phi_start,  phi_end, n_phi, endpoint=True),
-                                        operand = None)
+    phi   = _phi_grid(phi_start, phi_end, full_angle, n_phi)
     t, p  = jnp.meshgrid(theta, phi, indexing='ij')
     return flux_surfaces.cartesian_position(s,t,p).reshape(-1,3)
 
@@ -569,6 +547,15 @@ def mesh_poloidal_plane(flux_surface : ParametrisedSurface, s_layers : jnp.ndarr
     connectivity = _mesh_poloidal_connectivity(s_layers.shape[0], n_theta, include_axis)
     return points, connectivity
 
+def _build_layer_strips(n_layers, n_points_mesh, n_theta, n_phi):
+    # Connecting layers
+    n_offsets = jnp.arange(n_layers - 1) * n_points_mesh
+
+    first_closed_strips = _build_closed_strips(n_theta, n_offsets, n_offsets + n_points_mesh, True, n_phi, n_phi).reshape(n_layers - 1, -1, 3)
+    end_closed_strips   = _build_closed_strips(n_theta, n_offsets + (n_phi - 1), n_offsets + n_points_mesh + (n_phi-1), False, n_phi, n_phi).reshape(n_layers - 1, -1, 3)
+
+    return jnp.stack([first_closed_strips, end_closed_strips], axis=1).reshape(n_layers -1, -1, 3)
+
 @partial(jax.jit, static_argnums= (0,1,2,3))
 def _mesh_watertight_layers_connectivity(n_layers : int, full_angle : bool,  n_theta : int, n_phi : int):
 
@@ -578,21 +565,8 @@ def _mesh_watertight_layers_connectivity(n_layers : int, full_angle : bool,  n_t
     n_points_mesh                   = n_theta * n_phi # always the same
     connectivity_base_surfaces      =  _concatenate_connectivity(multiple_surface_connectivity, jnp.full(n_layers, n_points_mesh)).reshape(n_layers,-1, 3)
 
-    def build_strips(n_layers, n_points_mesh):
-        # Connecting layers
-        n_offsets = jnp.arange(n_layers - 1) * n_points_mesh
-
-        first_closed_strips = _build_closed_strips(n_theta, n_offsets, n_offsets + n_points_mesh, True, n_phi, n_phi).reshape(n_layers - 1, -1, 3)
-        end_closed_strips   = _build_closed_strips(n_theta, n_offsets + (n_phi - 1), n_offsets + n_points_mesh + (n_phi-1), False, n_phi, n_phi).reshape(n_layers - 1, -1, 3)
-
-        
-        closed_strips = jnp.stack([first_closed_strips, end_closed_strips], axis=1).reshape(n_layers -1, -1, 3)
-        
-        return closed_strips
-        
-
     if not full_angle:
-        closed_strips = build_strips(n_layers, n_points_mesh)
+        closed_strips = _build_layer_strips(n_layers, n_points_mesh, n_theta, n_phi)
 
         # connectivity surface 1, side layer 1, connectivity surface 2, side layer 1, ...
         # ... n_layers is static, so this control flow is possible ...
@@ -655,6 +629,24 @@ def _mesh_watertight_layers(flux_surfaces : ParametrisedSurface, s_values : jnp.
 
 
 
+def _strip_tets_true(vertex_c, vertex_d, vertex_e, vertex_f, vertex_g, vertex_h, vertex_i, vertex_j):
+    t1 =  jnp.stack([vertex_c, vertex_e, vertex_f, vertex_i], axis = -1)
+    t2 =  jnp.stack([vertex_c, vertex_f, vertex_i, vertex_j], axis = -1)
+    t3 =  jnp.stack([vertex_c, vertex_g, vertex_j, vertex_i], axis = -1)
+    t4 =  jnp.stack([vertex_c, vertex_d, vertex_f, vertex_j], axis = -1)
+    t5 =  jnp.stack([vertex_c, vertex_d, vertex_g, vertex_j], axis = -1)
+    t6 =  jnp.stack([vertex_h, vertex_d, vertex_g, vertex_j], axis = -1)
+    return jnp.stack([t1, t2, t3, t4, t5, t6], axis=-2) # last axis is vertices, second last is tetrahedron index (0 to 5)
+
+def _strip_tets_false(vertex_c, vertex_d, vertex_e, vertex_f, vertex_g, vertex_h, vertex_i, vertex_j):
+    t1 =  jnp.stack([vertex_c, vertex_e, vertex_i, vertex_f], axis=-1)
+    t2 =  jnp.stack([vertex_c, vertex_f, vertex_j, vertex_i], axis=-1)
+    t3 =  jnp.stack([vertex_c, vertex_g, vertex_i, vertex_j], axis=-1)
+    t4 =  jnp.stack([vertex_c, vertex_d, vertex_j, vertex_f], axis=-1)
+    t5 =  jnp.stack([vertex_c, vertex_d, vertex_j, vertex_g], axis=-1)
+    t6 =  jnp.stack([vertex_h, vertex_d, vertex_j, vertex_g], axis=-1)
+    return jnp.stack([t1, t2, t3, t4, t5, t6], axis=-2)
+
 @partial(jax.jit, static_argnums = (0))
 def _tetrahedral_closed_strip(n_strip : int, offset_index_0 : int, offset_index_1 : int, offset_index_2 : int, offset_index_3 : int, volume_orientation : bool, stride_0 : int, stride_1: int, stride_2 : int, stride_3 : int):
 
@@ -673,32 +665,19 @@ def _tetrahedral_closed_strip(n_strip : int, offset_index_0 : int, offset_index_
     vertex_i = ( (u_i_block + 1) % n_strip ) * stride_2 + offset_index_2  # third line next
     vertex_j = ( (u_i_block + 1) % n_strip ) * stride_3 + offset_index_3  # fourth line next
 
-    def orientation_true(x):
-        t1 =  jnp.stack([vertex_c, vertex_e, vertex_f, vertex_i], axis = -1)        
-        t2 =  jnp.stack([vertex_c, vertex_f, vertex_i, vertex_j], axis = -1)
-        t3 =  jnp.stack([vertex_c, vertex_g, vertex_j, vertex_i], axis = -1)
-        t4 =  jnp.stack([vertex_c, vertex_d, vertex_f, vertex_j], axis = -1)
-        t5 =  jnp.stack([vertex_c, vertex_d, vertex_g, vertex_j], axis = -1)
-        t6 =  jnp.stack([vertex_h, vertex_d, vertex_g, vertex_j], axis = -1)
-        return jnp.stack([t1, t2, t3, t4, t5, t6], axis=-2) # last axis is vertices, second last is tetrahedron index (0 to 5)
+    verts = (vertex_c, vertex_d, vertex_e, vertex_f, vertex_g, vertex_h, vertex_i, vertex_j)
+    vertices = jnp.where(volume_orientation, _strip_tets_true(*verts), _strip_tets_false(*verts))
 
-    def orientation_false(x):
-        t1 =  jnp.stack([vertex_c, vertex_e, vertex_i, vertex_f], axis=-1)
-        t2 =  jnp.stack([vertex_c, vertex_f, vertex_j, vertex_i], axis=-1)
-        t3 =  jnp.stack([vertex_c, vertex_g, vertex_i, vertex_j], axis=-1)
-        t4 =  jnp.stack([vertex_c, vertex_d, vertex_j, vertex_f], axis=-1)
-        t5 =  jnp.stack([vertex_c, vertex_d, vertex_j, vertex_g], axis=-1)
-        t6 =  jnp.stack([vertex_h, vertex_d, vertex_j, vertex_g], axis=-1)
-        return jnp.stack([t1, t2, t3, t4, t5, t6], axis=-2) # last axis is vertices, second last is tetrahedron index (0 to 5)
-        
-    vertices =  jax.lax.cond(volume_orientation, orientation_true, orientation_false, operand=None)
-    
     return vertices
 
 def _tetrahedral_open_strip(n_strip : int, offset_index_0 : int, offset_index_1 : int, offset_index_2 : int, offset_index_3 : int, volume_orientation : bool, stride_0 : int, stride_1: int, stride_2 : int, stride_3 : int):
     return _tetrahedral_closed_strip(n_strip, offset_index_0, offset_index_1, offset_index_2, offset_index_3, volume_orientation, stride_0, stride_1, stride_2, stride_3)[:-1, ...] # remove last strip which would wrap around
 
 _tetrahedral_open_strip_vmap = jax.jit(jax.vmap(_tetrahedral_open_strip, in_axes=(None,0,0,0,0,None,None,None,None,None), out_axes=0), static_argnums=(0))
+
+def _open_cube_layer(j, n_x, n_y, n_z):
+    arange_nz = jnp.arange(n_z - 1) + j * n_z
+    return _tetrahedral_open_strip_vmap(n_x, arange_nz, 1 + arange_nz, n_z + arange_nz, n_z + 1 + arange_nz, True,  n_y * n_z, n_y * n_z, n_y * n_z, n_y * n_z)
 
 def _tetrahedral_open_cube(n_x : int, n_y : int, n_z : int):
     '''
@@ -722,12 +701,21 @@ def _tetrahedral_open_cube(n_x : int, n_y : int, n_z : int):
     jnp.ndarray [n_tetrahedra = (n_z - 1) * (n_y -1 ) * (n_x - 1) * 6,  4]
         An array containing the tetrahedral connectivity.        
     '''    
-    def layer_iteration(j):
-        arange_nz = jnp.arange(n_z - 1) + j * n_z
-        return _tetrahedral_open_strip_vmap(n_x, arange_nz, 1 + arange_nz, n_z + arange_nz, n_z + 1 + arange_nz, True,  n_y * n_z, n_y * n_z, n_y * n_z, n_y * n_z)    
-    result =  jax.vmap(layer_iteration, in_axes=0)(jnp.arange(n_y - 1))     #[n_y -1, n_z -1, n_x -1, 6, 4]    
+    result =  jax.vmap(_open_cube_layer, in_axes=(0, None, None, None))(jnp.arange(n_y - 1), n_x, n_y, n_z)     #[n_y -1, n_z -1, n_x -1, 6, 4]    
     result_rs = jnp.moveaxis(result, 2,0)    
     return result_rs.reshape(-1,4)
+
+def _wedge_tets_true(vertex_a, vertex_b, vertex_c, vertex_d, vertex_e, vertex_f):
+    t1 =  jnp.stack([vertex_a, vertex_b, vertex_c, vertex_e], axis = -1)
+    t2 =  jnp.stack([vertex_b, vertex_c, vertex_e, vertex_f], axis = -1)
+    t3 =  jnp.stack([vertex_b, vertex_c, vertex_d, vertex_f], axis = -1)
+    return jnp.stack([t1, t2, t3], axis=-2) # last axis is vertices, second last is tetrahedron index (0 to 3)
+
+def _wedge_tets_false(vertex_a, vertex_b, vertex_c, vertex_d, vertex_e, vertex_f):
+    t1 =  jnp.stack([vertex_a, vertex_b, vertex_e, vertex_c], axis = -1)
+    t2 =  jnp.stack([vertex_b, vertex_c, vertex_f, vertex_e], axis = -1)
+    t3 =  jnp.stack([vertex_b, vertex_c, vertex_f, vertex_d], axis = -1)
+    return jnp.stack([t1, t2, t3], axis=-2)
 
 def _tetrahedral_wedge(n_strip : int, offset_wedge_0 : int, offset_wedge_1 : int, offset_index_0 : int, offset_index_1 : int, volume_orientation : bool, stride_0 : int, stride_1 : int):   
     u_i_block = jnp.arange(n_strip)
@@ -742,19 +730,8 @@ def _tetrahedral_wedge(n_strip : int, offset_wedge_0 : int, offset_wedge_1 : int
     vertex_e = ( (u_i_block + 1) % n_strip ) * stride_0 + offset_index_0  # first line next
     vertex_f = ( (u_i_block + 1) % n_strip ) * stride_1 + offset_index_1  # second line next
 
-    def orientation_true(x):
-        t1 =  jnp.stack([vertex_a, vertex_b, vertex_c, vertex_e], axis = -1)
-        t2 =  jnp.stack([vertex_b, vertex_c, vertex_e, vertex_f], axis = -1)
-        t3 =  jnp.stack([vertex_b, vertex_c, vertex_d, vertex_f], axis = -1)        
-        return jnp.stack([t1, t2, t3], axis=-2) # last axis is vertices, second last is tetrahedron index (0 to 3)
-    
-    def orientation_false(x):
-        t1 =  jnp.stack([vertex_a, vertex_b, vertex_e, vertex_c], axis = -1)
-        t2 =  jnp.stack([vertex_b, vertex_c, vertex_f, vertex_e], axis = -1)
-        t3 =  jnp.stack([vertex_b, vertex_c, vertex_f, vertex_d], axis = -1)        
-        return jnp.stack([t1, t2, t3], axis=-2) # last axis is vertices, second last is tetrahedron index (0 to 3)
-
-    vertices = jax.lax.cond(volume_orientation, orientation_true, orientation_false, operand=None)
+    verts = (vertex_a, vertex_b, vertex_c, vertex_d, vertex_e, vertex_f)
+    vertices = jnp.where(volume_orientation, _wedge_tets_true(*verts), _wedge_tets_false(*verts))
     return vertices
 
 
@@ -913,9 +890,7 @@ def _mesh_tetrahedra_points_coordinates(s_layers, include_axis : bool,  phi_star
     assert s_layers.shape[0] >= 2, "At least two layers are required to create a tetrahedral mesh. Only {} were provided.".format(s_layers.shape[0])
         
     theta = jnp.linspace(0, 2 * jnp.pi, n_theta, endpoint=False)
-    phi   = jax.lax.cond(full_angle,    lambda _ : jnp.linspace(phi_start, phi_end, n_phi, endpoint=False),
-                                        lambda _ :jnp.linspace(phi_start, phi_end, n_phi, endpoint=True),
-                                        operand = None)
+    phi   = _phi_grid(phi_start, phi_end, full_angle, n_phi)
     if include_axis:        
         s_mg_layers, theta_mg_layers, phi_mg_layers = jnp.meshgrid(s_layers[1:], theta, phi, indexing='ij')
         axis_s_theta = jnp.zeros(n_phi)

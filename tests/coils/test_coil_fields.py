@@ -48,7 +48,7 @@ def loop_field_elliptic(I, R, rho, z):
 
 def test_filament_on_axis():
     I, R, z = 1e6, 3.0, 1.5
-    b = filament_field(stack(ring(R)), jnp.array([I]), jnp.array([[0.0, 0.0, z]]), n=128)[0]
+    b = filament_field(stack(ring(R)), jnp.array([I]), jnp.array([[0.0, 0.0, z]]), n=128, batch_size=1)[0]
     expect = MU0 * I * R ** 2 / (2 * (R ** 2 + z ** 2) ** 1.5)
     onp.testing.assert_allclose(b, [0, 0, expect], atol=1e-11 * expect)
 
@@ -57,7 +57,7 @@ def test_filament_on_axis():
 def test_filament_off_axis_elliptic(rho, z):
     I, R, phi = 2.5e5, 3.0, 0.7
     pt = jnp.array([[rho * onp.cos(phi), rho * onp.sin(phi), z]])
-    b = onp.asarray(filament_field(stack(ring(R)), jnp.array([I]), pt, n=512)[0])
+    b = onp.asarray(filament_field(stack(ring(R)), jnp.array([I]), pt, n=512, batch_size=1)[0])
     brho, bz = loop_field_elliptic(I, R, rho, z)
     onp.testing.assert_allclose(b, [brho * onp.cos(phi), brho * onp.sin(phi), bz], rtol=1e-9, atol=1e-9 * abs(bz))
 
@@ -71,8 +71,8 @@ def test_others_removes_one_coil():
         keep = [k for k in range(3) if k != i]
         assert sorted(j.tolist()) == keep                                # cyclic order, the sum does not care
         kk = jnp.array(keep)
-        ref = filament_field(stack(*[(ring(3.0), ring(2.0, (0, 0, 1.0)), ring(1.5, (0, 0, -1.0)))[k] for k in keep]), cur[kk], on_coil, n=64)
-        onp.testing.assert_allclose(filament_field(jax.tree.map(lambda a: a[j], cs), cur[j], on_coil, n=64), ref, rtol=1e-12)
+        ref = filament_field(stack(*[(ring(3.0), ring(2.0, (0, 0, 1.0)), ring(1.5, (0, 0, -1.0)))[k] for k in keep]), cur[kk], on_coil, n=64, batch_size=8)
+        onp.testing.assert_allclose(filament_field(jax.tree.map(lambda a: a[j], cs), cur[j], on_coil, n=64, batch_size=8), ref, rtol=1e-12)
 
 
 # ---------------------------------------------------------------------------------------------- (2) self field
@@ -173,7 +173,7 @@ def test_ring_inductance_analytic(R, w, h):
     """L = mu0 R (ln(8R/GMD) - 2), GMD = 0.2235 (w + h) (Grover). This is the full inductance of a uniform current
     (for a circular wire it is Maxwell's mu0 R (ln(8R/a) - 7/4), GMD = a exp(-1/4)): it already contains the internal
     inductance, so the softened kernel alone must reproduce it. O((w/R)^2) and 4-digit GMD constant."""
-    L = float(total_inductance(stack(ring(R)), w, h, n_rows=1, n_mut=128, n_self=2048))
+    L = float(total_inductance(stack(ring(R)), w, h, n_rows=1, n_mut=128, n_self=2048, batch_size=1))
     expect = float(MU0 * R * (jnp.log(8 * R / (0.2235 * (w + h))) - 2.0))
     assert abs(L - expect) < 1e-3 * expect, (L, expect)
 
@@ -192,14 +192,14 @@ def test_ring_inductance_vs_filament_bundle():
     Mij = MU0 * onp.sqrt(Ri * Rj) * ((2 / onp.sqrt(k2) - onp.sqrt(k2)) * ellipk(k2) - 2 / onp.sqrt(k2) * ellipe(k2))
     cell = w / m
     L_ref = onp.sum(onp.where(off, Mij, 0.0)) / m ** 4 + onp.mean(MU0 * r * (onp.log(8 * r / (0.44705 * cell)) - 2.0)) / m ** 2
-    L = float(total_inductance(stack(ring(R)), w, w, n_rows=1, n_mut=128, n_self=2048))
+    L = float(total_inductance(stack(ring(R)), w, w, n_rows=1, n_mut=128, n_self=2048, batch_size=1))
     assert abs(L - L_ref) < 5e-4 * L_ref, (L, L_ref)
 
 
 def test_two_coaxial_rings_mutual_matches_elliptic_neumann():
     """Mutual inductance of coaxial circles, M = mu0 sqrt(R1 R2) [(2/k - k) K - 2/k E], k^2 = 4 R1 R2 / ((R1+R2)^2 + d^2)."""
     R1, R2, d = 3.0, 2.0, 1.0
-    L = onp.asarray(inductance_matrix(stack(ring(R1), ring(R2, (0, 0, d))), 0.05, 0.05, n_rows=2, n_mut=512, n_self=1024))
+    L = onp.asarray(inductance_matrix(stack(ring(R1), ring(R2, (0, 0, d))), 0.05, 0.05, n_rows=2, n_mut=512, n_self=1024, batch_size=2))
     k2 = 4 * R1 * R2 / ((R1 + R2) ** 2 + d ** 2)
     M = MU0 * onp.sqrt(R1 * R2) * ((2 / onp.sqrt(k2) - onp.sqrt(k2)) * ellipk(k2) - 2 / onp.sqrt(k2) * ellipe(k2))
     onp.testing.assert_allclose(L[0, 1], M, rtol=1e-10)
@@ -214,10 +214,10 @@ def test_periodicity_option_matches_full_sum():
         er = (onp.cos(ph), onp.sin(ph), 0.0)
         coils.append(ring(r, centre=(R0 * er[0], R0 * er[1], 0.0), e1=er, e2=(0.0, 0.0, 1.0)))
     cs = stack(*coils)
-    full = total_inductance(cs, 0.05, 0.05, n_rows=n, n_mut=128, n_self=512)
-    part = total_inductance(cs, 0.05, 0.05, n_rows=1, n_mut=128, n_self=512)
+    full = total_inductance(cs, 0.05, 0.05, n_rows=n, n_mut=128, n_self=512, batch_size=n)
+    part = total_inductance(cs, 0.05, 0.05, n_rows=1, n_mut=128, n_self=512, batch_size=1)
     onp.testing.assert_allclose(part, full, rtol=1e-10)
-    L = onp.asarray(inductance_matrix(cs, 0.05, 0.05, n_rows=n, n_mut=128, n_self=512))
+    L = onp.asarray(inductance_matrix(cs, 0.05, 0.05, n_rows=n, n_mut=128, n_self=512, batch_size=n))
     onp.testing.assert_allclose(L, L.T, rtol=1e-10)
 
 
@@ -238,7 +238,7 @@ def test_gradients_vs_finite_differences():
     # width
     f = lambda w: jnp.sum(self_field(fs(coil), 1e5, w, 0.07, s, u=-1.0, v=0.0, n_src=512))
     onp.testing.assert_allclose(jax.grad(f)(0.1), _fd(f, 0.1, 1e-5), rtol=1e-6)
-    f = lambda w: total_inductance(cs2, w, 0.07, n_rows=2, n_mut=64, n_self=256)
+    f = lambda w: total_inductance(cs2, w, 0.07, n_rows=2, n_mut=64, n_self=256, batch_size=2)
     onp.testing.assert_allclose(jax.grad(f)(0.1), _fd(f, 0.1, 1e-5), rtol=1e-6)
 
     # a Fourier coefficient
@@ -250,7 +250,7 @@ def test_gradients_vs_finite_differences():
     def f(c):
         co = FourierCoil(fourier_cos=cs2.coils.fourier_cos.at[1, 0, 0].set(c), fourier_sin=cs2.coils.fourier_sin, centre_i=cs2.coils.centre_i)
         co = CoilSet(co)
-        return fd(co, jnp.array([1e5, 2e5]), 0.1, 0.07, 1, 0.3, 256, 64) + total_inductance(co, 0.1, 0.07, n_rows=2, n_mut=64, n_self=256)
+        return fd(co, jnp.array([1e5, 2e5]), 0.1, 0.07, 1, 0.3, 256, 64) + total_inductance(co, 0.1, 0.07, n_rows=2, n_mut=64, n_self=256, batch_size=2)
     onp.testing.assert_allclose(jax.grad(f)(3.9), _fd(f, 3.9, 1e-5), rtol=1e-5)
 
     def f(c):                                                  # the polished maximum: exact gradient by the envelope theorem
@@ -274,13 +274,13 @@ def test_jit_and_vmap():
     cs2 = stack(wavy(), wavy(1.3))
     pts = jnp.array([[0.0, 0.0, 0.5], [1.0, 0.2, -0.3]])
     cur = jnp.array([1e5, 2e5])
-    b = filament_field(cs2, cur, pts, 64)
-    onp.testing.assert_allclose(jax.jit(filament_field, static_argnums=(3,))(cs2, cur, pts, 64), b, rtol=1e-12)
-    bs = jax.vmap(lambda scale: filament_field(cs2, scale * cur, pts, 64))(jnp.array([1.0, 2.0]))
+    b = filament_field(cs2, cur, pts, 64, 8)
+    onp.testing.assert_allclose(jax.jit(filament_field, static_argnums=(3, 4))(cs2, cur, pts, 64, 8), b, rtol=1e-12)
+    bs = jax.vmap(lambda scale: filament_field(cs2, scale * cur, pts, 64, 8))(jnp.array([1.0, 2.0]))
     onp.testing.assert_allclose(bs[1], 2 * b, rtol=1e-12)
 
     widths = jnp.array([0.05, 0.1])
-    Ls = jax.jit(jax.vmap(lambda w: total_inductance(cs2, w, 0.07, n_rows=2, n_mut=64, n_self=256)))(widths)
-    onp.testing.assert_allclose(Ls[1], total_inductance(cs2, 0.1, 0.07, n_rows=2, n_mut=64, n_self=256), rtol=1e-12)
+    Ls = jax.jit(jax.vmap(lambda w: total_inductance(cs2, w, 0.07, n_rows=2, n_mut=64, n_self=256, batch_size=2)))(widths)
+    onp.testing.assert_allclose(Ls[1], total_inductance(cs2, 0.1, 0.07, n_rows=2, n_mut=64, n_self=256, batch_size=2), rtol=1e-12)
     sf = jax.jit(jax.vmap(lambda I: self_field(fs(wavy()), I, 0.1, 0.07, jnp.arange(4) / 4, u=0.0, v=0.0, n_src=256)))(cur)
     onp.testing.assert_allclose(sf[1], 2 * sf[0], rtol=1e-12)

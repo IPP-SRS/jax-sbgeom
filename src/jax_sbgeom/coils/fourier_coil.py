@@ -118,25 +118,29 @@ def _fourier_position(coil : FourierCoil, s):
     jnp.ndarray
         Cartesian position(s) along the coil
     '''
-    n_modes = coil.fourier_cos.shape[-2]
-    n    = jnp.arange(1.0, n_modes + 1.0) * 2 * jnp.pi # shape (N_modes,)
-    
-    # The final shape should be (fourier_coil_batch_dimensions, s_shape, 3)
-    final_shape = jnp.array(s).shape + (3,)
-    initial_sum = jnp.zeros(final_shape)
+    s = jnp.asarray(s)
+    return _fourier_series(coil, s)[0] + coil.centre_i
 
-    def fourier_sum(vals, i):
-        xyz = vals # shape (..., s_shape, 3)
-        
-        angle_cos = jnp.cos(n[i] * s) # shape (s_shape,)
-        angle_sin = jnp.sin(n[i] * s) # shape (s_shape,)
-        xyz = xyz + coil.fourier_cos[i, :] * angle_cos[..., None] + coil.fourier_sin[ i, :] * angle_sin[..., None]
-        return xyz, None
-    
-    # Fourier_cos is shape (..., N_modes, 3) where ... are batch dimensions
-    # so we need to create an output shape of (..., s_shape, 3)
-    xyz = jax.lax.scan(fourier_sum, initial_sum, jnp.arange(n_modes))[0]
-    return xyz + coil.centre_i 
+
+def _fourier_series(coil : FourierCoil, s, order : int = 0):
+    '''
+    Fourier sum (without the constant centre_i) and, optionally, its derivatives with respect to s, as ONE contraction
+    over the modes (cos/sin tables [..., N_modes] @ coefficients [N_modes, 3]) instead of a sequential scan over the modes.
+
+    Returns
+    -------
+    tuple of order + 1 arrays of shape s.shape + (3,): the sum and its first ... order-th derivative.
+    '''
+    n_modes = coil.fourier_cos.shape[-2]
+    w   = jnp.arange(1.0, n_modes + 1.0) * 2 * jnp.pi                 # [N_modes]
+    arg = s[..., None] * w                                            # [..., N_modes]
+    c, sn = jnp.cos(arg), jnp.sin(arg)
+    out = []
+    for k in range(order + 1):
+        out.append(jnp.einsum('...n,nk->...k', c, coil.fourier_cos) + jnp.einsum('...n,nk->...k', sn, coil.fourier_sin))
+        # d/ds: cos -> -w sin, sin -> w cos
+        c, sn = -w * sn, w * c
+    return tuple(out)
 
 
 _grad_fourier_position = jax.jit(jnp.vectorize(stack_jacfwd(_fourier_position, argnums=1), excluded=(0,), signature='()->(3)'))

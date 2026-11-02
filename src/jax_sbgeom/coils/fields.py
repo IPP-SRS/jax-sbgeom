@@ -8,8 +8,11 @@ Filament fields use the periodic trapezoid rule on the analytic curve (spectrall
     (kernel softened by delta * a * b) plus local terms for the rectangular cross-section (equation numbers refer to the paper).
 '''
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
+from jax_sbgeom.jax_utils.utils import map_chunked
 from .base_coil import FiniteSizeCoil
 from .biot_savart import biot_savart, Constant
 from .coilset import CoilSet
@@ -23,6 +26,7 @@ def _nodes(coil, n: int) -> tuple[jnp.ndarray, jnp.ndarray]:
     return coil.position(s), coil.derivative(s) / n
 
 
+@partial(jax.jit, static_argnums=1)
 def coil_elements(coils: CoilSet, n: int) -> tuple[jnp.ndarray, jnp.ndarray]:
     '''
     Trapezoid-rule nodes of a coil set.
@@ -44,7 +48,7 @@ def coil_elements(coils: CoilSet, n: int) -> tuple[jnp.ndarray, jnp.ndarray]:
 # ---------------------------------------------------------------------------------------------------------------------
 #  Filament field
 # ---------------------------------------------------------------------------------------------------------------------
-def filament_field(coils: CoilSet, currents: jnp.ndarray, points: jnp.ndarray, n: int) -> jnp.ndarray:
+def filament_field(coils: CoilSet, currents: jnp.ndarray, points: jnp.ndarray, n: int, batch_size: int = 64) -> jnp.ndarray:
     '''
     Magnetic field of all coils as infinitely thin filaments (periodic trapezoid rule with n nodes per coil).
     The points must not lie on a coil (the field of a filament diverges there).
@@ -58,18 +62,20 @@ def filament_field(coils: CoilSet, currents: jnp.ndarray, points: jnp.ndarray, n
         Evaluation points [M, 3]
     n : int
         Number of nodes per coil.
+    batch_size : int
+        Points per chunk (static), see `biot_savart` (default 64).
 
     Returns
     -------
     jnp.ndarray
         Field [M, 3]
     '''
-    return _field_of_nodes(*coil_elements(coils, n), currents, points)
+    return _field_of_nodes(*coil_elements(coils, n), currents, points, batch_size)
 
 
-def _field_of_nodes(pos, dl, currents, points):
+def _field_of_nodes(pos, dl, currents, points, batch_size):
     '''Filament field of coils given by their nodes pos, dl [n_coils, n, 3].'''
-    return biot_savart(jnp.repeat(currents, pos.shape[1]), pos.reshape(-1, 3), dl.reshape(-1, 3), points)
+    return biot_savart(jnp.repeat(currents, pos.shape[1]), pos.reshape(-1, 3), dl.reshape(-1, 3), points, batch_size)
 
 
 def _others(n: int, i) -> jnp.ndarray:
@@ -221,14 +227,16 @@ def force_density_on_filament(coils: CoilSet, currents: jnp.ndarray, width: floa
     c, j = coils[i], _others(currents.shape[0], i)
     sv = jnp.reshape(s, (1,))
     x, (xs, dl) = c.position(sv), _nodes(c, n_src)
-    b = regularised_field(x, xs, dl, currents[i], delta * width * height) + _field_of_nodes(pos[j], dl_all[j], currents[j], x)
+    b = regularised_field(x, xs, dl, currents[i], delta * width * height) + _field_of_nodes(pos[j], dl_all[j], currents[j], x, 1)
     return (jnp.linalg.norm(currents[i] * jnp.cross(c.tangent(sv), b), axis=-1) / (width * height))[0]
 
 
 # ---------------------------------------------------------------------------------------------------------------------
 #  Inductance
 # ---------------------------------------------------------------------------------------------------------------------
-def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int, n_mut: int, n_self: int) -> jnp.ndarray:
+@partial(jax.jit, static_argnames=("n_rows", "n_mut", "n_self", "batch_size"))
+def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int, n_mut: int, n_self: int,
+                      batch_size: int = 2) -> jnp.ndarray:
     '''
     Rows of the inductance matrix [H]. The off-diagonal entries are Neumann integrals
     L_ij = 1e-7 int int dl_i . dl_j / |x_i - x_j| (trapezoid rule, n_mut nodes). The diagonal uses the softened kernel
@@ -245,7 +253,12 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int, 
         Only compute the rows of the first n_rows coils (all columns): n_rows = n_coils for the full matrix, fewer for
         a periodic coil set (see `total_inductance`).
     n_mut, n_self : int
-        Nodes per coil of the mutual and self terms. 
+        Nodes per coil of the mutual and self terms. For the 50 Helias5 coils (10 rows) n_mut = 128, 256 has relative
+        errors of 7e-8, 2e-12 against n_mut = 512 (not monotone below: 8e-5 at 96); n_self was not studied there.
+    batch_size : int
+        Rows per chunk (static, see `map_chunked`; n_rows: all rows at once; default 2, the fastest of 1, 2, 5, 10 on the Helias5 coils: 55 ms forward against 142 ms at 10). Transient memory grows linearly with it: 50
+        Helias5 coils, n_mut = 128, n_self = 1024: batch_size 1 needs 20 MiB forward and 95 MiB for the gradient, batch_size
+        10 needs 188 and 655 MiB (compiled, CPU).
 
     Returns
     -------
@@ -256,7 +269,7 @@ def inductance_matrix(coils: CoilSet, width: float, height: float, n_rows: int, 
     pos, dl = coil_elements(coils, n_mut)
     pos_s, dl_s = coil_elements(CoilSet(coils[:n_rows]), n_self)
     consts = (pos, dl, pos_s, dl_s, delta * width * height)
-    return jax.vmap(_inductance_row, in_axes=(0, None))(jnp.arange(n_rows), consts)
+    return map_chunked(_inductance_row, jnp.arange(n_rows), consts, batch_size)
 
 
 def _mutual(j, i, pos, dl):
@@ -273,7 +286,8 @@ def _inductance_row(i, consts):
     return jnp.where(jnp.arange(n_c) == i, own, jax.vmap(_mutual, in_axes=(0, None, None, None))(jnp.arange(n_c), i, pos, dl))
 
 
-def total_inductance(coils: CoilSet, width: float, height: float, n_rows: int, n_mut: int, n_self: int) -> jnp.ndarray:
+def total_inductance(coils: CoilSet, width: float, height: float, n_rows: int, n_mut: int, n_self: int,
+                     batch_size: int = 2) -> jnp.ndarray:
     '''
     Sum of all entries of the inductance matrix [H], i.e. the inductance of the coils connected in series (equal
     currents). The first n_rows coils have to be mapped onto all the others by a symmetry of the coil set (n_rows
@@ -281,4 +295,4 @@ def total_inductance(coils: CoilSet, width: float, height: float, n_rows: int, n
     n_coils / n_rows. See `inductance_matrix`.
     '''
     assert coils.n_coils % n_rows == 0, "n_rows must divide the number of coils"
-    return (coils.n_coils // n_rows) * jnp.sum(inductance_matrix(coils, width, height, n_rows, n_mut, n_self))
+    return (coils.n_coils // n_rows) * jnp.sum(inductance_matrix(coils, width, height, n_rows, n_mut, n_self, batch_size))

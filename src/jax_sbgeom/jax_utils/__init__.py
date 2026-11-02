@@ -1,4 +1,4 @@
-from .utils import stack_jacfwd
+from .utils import stack_jacfwd, tree_take, map_chunked
 from . import optimize
 from . import raytracing
 from . import splines
@@ -7,7 +7,7 @@ from .numerical import cumulative_trapezoid_uniform_periodic, pchip_interpolatio
 from .numerical import resample_uniform_periodic_linear, resample_uniform_periodic_pchip
 from .numerical import reverse_except_begin
 from .mesh import mesh_to_pyvista_mesh, surface_normals_from_mesh, vertices_to_pyvista_polyline, boundary_centroids_from_tetrahedron, boundary_normal_vectors_from_tetrahedron
-__all__ = ["stack_jacfwd", 
+__all__ = ["stack_jacfwd", "tree_take", "map_chunked", 
               "optimize",  
                 "raytracing",
                 "splines",

@@ -91,7 +91,7 @@ class Coil(ABC):
             Number of equally spaced samples in s (default: class dependent).
         '''
         n = self._default_length_samples() if n_samples is None else n_samples
-        return jnp.mean(self.speed(jnp.arange(n) / n))
+        return _length(self, n)
 
     def centroid(self, n_samples : int = None):
         '''
@@ -108,9 +108,7 @@ class Coil(ABC):
             Centroid, shape (3,)
         '''
         n = self._default_length_samples() if n_samples is None else n_samples
-        s = jnp.arange(n) / n
-        w = self.speed(s)
-        return jnp.sum(self.position(s) * w[:, None], axis=0) / jnp.sum(w)
+        return _centroid(self, n)
 
     def bounding_box(self, n_samples : int = None):
         '''
@@ -130,15 +128,36 @@ class Coil(ABC):
             Minimum and maximum coordinates, each of shape (3,)
         '''
         n = self._default_length_samples() if n_samples is None else n_samples
-        polish = Polish(1e-10, 12)
-        lo = jnp.stack([-maximise_periodic(_signed_coordinate, (self, i, -1.0), n, polish) for i in range(3)])
-        hi = jnp.stack([maximise_periodic(_signed_coordinate, (self, i, 1.0), n, polish) for i in range(3)])
-        return lo, hi
+        return _bounding_box(self, n)
 
 
 def _signed_coordinate(s, args):
     coil, i, sign = args
     return sign * coil.position(s)[i]
+
+
+def _extremum(i, sign, coil, n):
+    '''Extremum of coordinate i (sign=+1: max, -1: min), polished from the best of n samples.'''
+    return sign * maximise_periodic(_signed_coordinate, (coil, i, sign), n, Polish(1e-10, 12))
+
+
+@eqx.filter_jit
+def _bounding_box(coil, n):
+    i    = jnp.array([0, 1, 2, 0, 1, 2])
+    sign = jnp.array([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0])
+    ext  = jax.vmap(_extremum, in_axes=(0, 0, None, None))(i, sign, coil, n)                # one polish for all six
+    return ext[:3], ext[3:]
+
+
+@eqx.filter_jit
+def _length(coil, n):
+    return jnp.mean(coil.speed(jnp.arange(n) / n))
+
+@eqx.filter_jit
+def _centroid(coil, n):
+    s = jnp.arange(n) / n
+    w = coil.speed(s)
+    return jnp.sum(coil.position(s) * w[:, None], axis=0) / jnp.sum(w)
 
 
 # Functional versions for vmapping in coilsets
@@ -643,7 +662,7 @@ def _rmf_radial_vector_from_data(coil_centre, positions, tangents):
 
     tanv0 = _angle_axis_to_matrix(tangents[-1], angle)
 
-    angle_corr       = jax.lax.cond(jnp.arccos(jnp.dot(initial_result, tanv0 @ final_result)) > angle, lambda _ : -angle, lambda _ : angle, operand = None)
+    angle_corr       = jnp.where(jnp.arccos(jnp.dot(initial_result, tanv0 @ final_result)) > angle, -angle, angle)
 
     uniform_rotation = jnp.linspace(0.0, angle_corr, n_samples)
     
@@ -715,6 +734,12 @@ def _coil_rotation_positive(coil):
     angles = jnp.arctan2(z_offset, r_offset)    
     return jnp.sum(jnp.diff(jnp.unwrap(angles))) > 0    
 
+def _identity(coil):
+    return coil
+
+def _reverse(coil):
+    return coil.reverse_parametrisation()
+
 @partial(jax.jit)
 def ensure_coil_rotation(coil : Coil, positive_rotation : bool):    
     '''
@@ -729,5 +754,5 @@ def ensure_coil_rotation(coil : Coil, positive_rotation : bool):
     Returns
         Coil       : Coil with ensured rotation
     '''    
-    return jax.lax.cond(_coil_rotation_positive(coil) == positive_rotation , lambda _ : coil, lambda _ : coil.reverse_parametrisation(), operand=None)
+    return jax.lax.cond(_coil_rotation_positive(coil) == positive_rotation, _identity, _reverse, coil)
     

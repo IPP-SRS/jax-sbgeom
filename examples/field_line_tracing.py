@@ -77,7 +77,7 @@ segments = jnp.roll(positions_coils, -1, axis=1) - positions_coils
 
 # %%
 def Bfield(r):    
-    return jsc.biot_savart.biot_savart_batch(jax_currents_tot.reshape(-1), positions_coils.reshape(-1,3), segments.reshape(-1,3), r.reshape(-1,3))
+    return jsc.biot_savart.biot_savart(jax_currents_tot.reshape(-1), positions_coils.reshape(-1,3), segments.reshape(-1,3), r.reshape(-1,3), 64)
 
 
 bfield_computed = Bfield(positions_lcfs)

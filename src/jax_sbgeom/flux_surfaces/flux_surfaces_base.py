@@ -6,6 +6,7 @@ import jax
 import numpy as onp
 from dataclasses import dataclass
 from jax_sbgeom.jax_utils import stack_jacfwd, interpolate_array
+from jax_sbgeom.jax_utils.numerical import interpolate_fractions
 from functools import partial
 import equinox as eqx
 
@@ -177,7 +178,8 @@ def _reverse_theta_single(m_vec, n_vec, coeff_vec, cosine_sign : bool):
     # Build new coefficient map
     # For cosine, we just swap the numbers
     # For sine, we swap and change sign, except for the m=0 terms. These stay the same
-    new_coeff_vec = jax.lax.cond(cosine_sign, lambda _ : coeff_vec[idx_map], lambda _ :  jnp.where(keys[:,0] > 0, -coeff_vec[idx_map], coeff_vec[idx_map]), operand=None)
+    sign = jnp.where(cosine_sign | (keys[:,0] <= 0), 1.0, -1.0)
+    new_coeff_vec = sign * coeff_vec[idx_map]
     
     return new_coeff_vec
 
@@ -519,7 +521,7 @@ class FluxSurface(FluxSurfaceBase):
         float
             Minor radius
         '''
-        return jnp.sqrt(self.mean_cross_section_area(s) / jnp.pi)
+        return _minor_radius(self, s)
 
     def major_radius(self, s = 1.0):
         '''
@@ -534,7 +536,7 @@ class FluxSurface(FluxSurfaceBase):
         float
             Major radius
         '''
-        return self.volume(s) / (2.0 * jnp.pi ** 2 * self.minor_radius(s) ** 2)
+        return _major_radius(self, s)
 
     def aspect_ratio(self, s = 1.0):
         '''
@@ -549,7 +551,7 @@ class FluxSurface(FluxSurfaceBase):
         float
             Aspect ratio
         '''
-        return self.major_radius(s) / self.minor_radius(s)
+        return _aspect_ratio(self, s)
 
     def magnetic_axis(self, phi):
         '''
@@ -564,8 +566,7 @@ class FluxSurface(FluxSurfaceBase):
         jnp.ndarray
             Axis positions, shape (n, 3)
         '''
-        phi = jnp.asarray(phi, dtype=float)
-        return self.cartesian_position(0.0, jnp.zeros_like(phi), phi)
+        return _magnetic_axis(self, jnp.asarray(phi, dtype=float))
 
     def normal(self, s, theta, phi):
         '''
@@ -605,6 +606,25 @@ class FluxSurface(FluxSurfaceBase):
         '''
         return _principal_curvatures_interpolated(self, s, theta, phi)
     
+@eqx.filter_jit
+def _minor_radius(fs, s):
+    return jnp.sqrt(_mean_cross_section_area_from_fourier(fs, s) / jnp.pi)
+
+@eqx.filter_jit
+def _major_radius(fs, s):
+    a = _minor_radius(fs, s)
+    return _volume_from_fourier(fs, s) / (2.0 * jnp.pi ** 2 * a ** 2)
+
+@eqx.filter_jit
+def _aspect_ratio(fs, s):
+    # = (volume / (2 pi^2 a^2)) / a with the minor radius a computed once
+    a = _minor_radius(fs, s)
+    return _volume_from_fourier(fs, s) / (2.0 * jnp.pi ** 2 * a ** 3)
+
+@eqx.filter_jit
+def _magnetic_axis(fs, phi):
+    return fs.cartesian_position(0.0, jnp.zeros_like(phi), phi)
+
 def make_2d_flux_surface(fs : FluxSurfaceBase) -> FluxSurfaceBase:
     '''
     Convert a FluxSurface with 1D data to a FluxSurface with 2D data by adding a dummy surface dimension.
@@ -744,6 +764,79 @@ class ToroidalExtentStatic(ToroidalExtent):
 # ===================================================================================================================================================================================
 #                                                                           Positions
 # ===================================================================================================================================================================================
+
+# Fourier sums: a checkpointed lax.scan over the modes (no (points x modes) arrays), one module-level step per mode;
+# unroll=8 (measured) removes most of the per-iteration overhead on small point sets.
+def _scan_coeff(c, s):
+    return c if s is None else interpolate_array(c, s)
+
+@partial(jax.checkpoint, prevent_cse=False)
+def _scan_term(R, Z, Rc, Zc, m, n, s, theta, phi):
+    angle = m * theta - n * phi
+    return R + _scan_coeff(Rc, s) * jnp.cos(angle), Z + _scan_coeff(Zc, s) * jnp.sin(angle)
+
+def _scan_mode(carry, i):
+    '''One mode of the Fourier sum: carry = (R, Z, (Rmnc, Zmns, modes, s, theta, phi)), s None for a single surface.'''
+    R, Z, shared = carry
+    Rmnc, Zmns, modes, s, theta, phi = shared
+    R, Z = _scan_term(R, Z, Rmnc[..., i], Zmns[..., i], modes.mpol_vector[i], modes.ntor_vector[i], s, theta, phi)
+    return (R, Z, shared), None
+
+def _fourier_rz_scan(Rmnc, Zmns, modes, s, theta, phi):
+    zero = jnp.zeros_like(theta)   # theta, phi already broadcast to the output shape
+    R, Z, _ = jax.lax.scan(_scan_mode, (zero, zero, (Rmnc, Zmns, modes, s, theta, phi)), jnp.arange(Rmnc.shape[-1]), unroll=8)[0]
+    return R, Z
+
+def _interpolate_rows(coeffs, s):
+    '''Linear interpolation of the (n_surf, n_modes) coefficients at scalar s: returns (n_modes,).'''
+    i0, i1, ds = interpolate_fractions(s, coeffs.shape[0])
+    return (1 - ds) * coeffs[i0] + ds * coeffs[i1]
+
+def _dense_mode_matrix(flux_surface, c):
+    '''(..., n_modes) VMEC-ordered coefficients -> dense (..., mpol + 1, 2 ntor + 1) matrix over (m, n / nfp); entries (m=0, n<0) are zero.'''
+    ntor, mpol = flux_surface.settings.ntor, flux_surface.settings.mpol
+    m0 = jnp.concatenate([jnp.zeros(c.shape[:-1] + (ntor,), dtype=c.dtype), c[..., :ntor + 1]], axis=-1)
+    mpos = c[..., ntor + 1:].reshape(c.shape[:-1] + (mpol, 2 * ntor + 1))
+    return jnp.concatenate([m0[..., None, :], mpos], axis=-2)
+
+def _grid_rz_derivatives(flux_surface, s, theta, phi):
+    '''
+    R, Z and their first derivatives (R_theta, R_phi, Z_theta, Z_phi) on the tensor grid theta[:, None] x phi[None, :] (1D theta, phi) of the
+    surface at scalar s, each of shape (n_theta, n_phi). Analytic derivatives.
+
+    On a tensor grid cos/sin(m theta - n phi) = cos/sin(m theta) cos/sin(n phi) -/+ ... separates, so the double sum over the (m, n) modes becomes two
+    small matrix products (n_phi x n_n x n_m, then n_theta x n_m x n_phi) instead of n_theta n_phi n_modes trig evaluations.
+    '''
+    ntor, mpol, nfp = flux_surface.settings.ntor, flux_surface.settings.mpol, flux_surface.settings.nfp
+    m = jnp.arange(mpol + 1)
+    n = nfp * jnp.arange(-ntor, ntor + 1)
+    Rc = _dense_mode_matrix(flux_surface, _interpolate_rows(flux_surface.data.Rmnc, s))
+    Zc = _dense_mode_matrix(flux_surface, _interpolate_rows(flux_surface.data.Zmns, s))
+    # coefficient sets: R, m R, n R, Z, m Z, n Z
+    C = jnp.stack([Rc, m[:, None] * Rc, n[None, :] * Rc, Zc, m[:, None] * Zc, n[None, :] * Zc])
+    cm, sm = jnp.cos(m * theta[:, None]), jnp.sin(m * theta[:, None])      # (n_theta, mpol + 1)
+    cn, sn = jnp.cos(n * phi[:, None]), jnp.sin(n * phi[:, None])          # (n_phi, 2 ntor + 1)
+    # sum_ab C_ab f_a(theta) g_b(phi) for f, g in {cos, sin}
+    Cc, Cs = jnp.einsum('kab,jb->kaj', C, cn), jnp.einsum('kab,jb->kaj', C, sn)
+    cos_sum = jnp.einsum('ia,kaj->kij', cm, Cc) + jnp.einsum('ia,kaj->kij', sm, Cs)     # sum C cos(m theta - n phi)
+    sin_sum = jnp.einsum('ia,kaj->kij', sm, Cc) - jnp.einsum('ia,kaj->kij', cm, Cs)     # sum C sin(m theta - n phi)
+    R, Z = cos_sum[0], sin_sum[3]
+    R_theta, R_phi = -sin_sum[1], sin_sum[2]
+    Z_theta, Z_phi = cos_sum[4], -cos_sum[5]
+    return R, Z, R_theta, R_phi, Z_theta, Z_phi
+
+def _grid_position_and_normal(flux_surface, s, theta, phi):
+    '''
+    Cartesian position r and dr/dphi x dr/dtheta (the area-weighted normal used for volume and area) on the tensor grid theta[:, None] x phi[None, :]
+    of the surface at scalar s. Returns (r, n), each (n_theta, n_phi, 3).
+    '''
+    R, Z, R_t, R_p, Z_t, Z_p = _grid_rz_derivatives(flux_surface, s, theta, phi)
+    cp, sp = jnp.cos(phi)[None, :], jnp.sin(phi)[None, :]
+    r = jnp.stack([R * cp, R * sp, Z], axis=-1)
+    dr_dt = jnp.stack([R_t * cp, R_t * sp, Z_t], axis=-1)
+    dr_dp = jnp.stack([R_p * cp - R * sp, R_p * sp + R * cp, Z_p], axis=-1)
+    return r, jnp.cross(dr_dp, dr_dt)
+
 @partial(jax.jit)
 def _cylindrical_position_direct(flux_surface : FluxSurfaceBase, theta, phi):        
     '''
@@ -764,29 +857,8 @@ def _cylindrical_position_direct(flux_surface : FluxSurfaceBase, theta, phi):
     '''
     assert flux_surface.data.Rmnc.ndim == 1, "Rmnc must be a 1D array but is of shape {}".format(flux_surface.data.Rmnc.shape)
     
-    # This in essence computes:
-    # R   = jnp.sum(Rmnc_interp[..., None] * jnp.cos(mpol_vector[..., None] * theta[None, ...] - ntor_vector[..., None] * phi[None, ...]), axis=-1)
-    # However, although the above can be more efficient, it creates large intermediate arrays and is thus undesirable.
-    # Also, we call interpolate_array once per mode and per point in this setup
-    # Instead, we could have vectorized this calculation over all points, but that would also create large intermediate arrays.
-    
-    # Now, no n_modes x n_points arrays are created.
-
-    # This function is valid for both s,theta,phi all scalars and broadcastable arrays. 
-    def fourier_sum(vals, i):
-        R, Z = vals
-        R = R + flux_surface.data.Rmnc[i] * jnp.cos(flux_surface.modes.mpol_vector[i] * theta - flux_surface.modes.ntor_vector[i] * phi)
-        Z = Z + flux_surface.data.Zmns[i] * jnp.sin(flux_surface.modes.mpol_vector[i] * theta - flux_surface.modes.ntor_vector[i] * phi)
-        return (R,Z), None
-    
-    # The fourier_sum function automatically broadcast arrays. However, we need to ensure that 
-    # we start the scan with a zero object that has the correct final shape. Thus,
-    # we create dummy arrays that have the correct shape.
-    # The phi_bc  is required to ensure the final array phi is stackable with R, Z.
     theta_bc, phi_bc = jnp.broadcast_arrays(theta, phi)
-    
-    n_modes = flux_surface.data.Rmnc.shape[0]
-    R,Z = jax.lax.scan(fourier_sum, (jnp.zeros_like(theta_bc), jnp.zeros_like(theta_bc)), jnp.arange(n_modes))[0]    
+    R, Z = _fourier_rz_scan(flux_surface.data.Rmnc, flux_surface.data.Zmns, flux_surface.modes, None, theta_bc, phi_bc)
     return jnp.stack([R, Z, phi_bc],axis=-1)
 
 @partial(jax.jit)
@@ -868,34 +940,9 @@ def _cylindrical_position_interpolated(flux_surface : FluxSurfaceBase,  s,  thet
     '''
     assert flux_surface.data.Rmnc.ndim == 2, "Data must be a 2D array but is of shape {} [Did you use a FluxSurfaceBase with only 1D data? Check out make_2d_flux_surface.]".format(flux_surface.data.Rmnc.shape)
     
-    # This in essence computes:
-    # R   = jnp.sum(Rmnc_interp[..., None] * jnp.cos(mpol_vector[..., None] * theta[None, ...] - ntor_vector[..., None] * phi[None, ...]), axis=-1)
-    # However, although the above can be more efficient, it creates large intermediate arrays and is thus undesirable.
-    # Also, we call interpolate_array once per mode and per point in this setup
-    # Instead, we could have vectorized this calculation over all points, but that would also create large intermediate arrays.
-    
-    # Now, no n_modes x n_points arrays are created.
-
-    # This function is valid for both s,theta,phi all scalars and broadcastable arrays. 
-    @jax.checkpoint 
-    def fourier_sum(vals, i):
-        R, Z = vals
-        R = R + interpolate_array(flux_surface.data.Rmnc[..., i], s) * jnp.cos(flux_surface.modes.mpol_vector[i] * theta - flux_surface.modes.ntor_vector[i] * phi)
-        Z = Z + interpolate_array(flux_surface.data.Zmns[..., i], s) * jnp.sin(flux_surface.modes.mpol_vector[i] * theta - flux_surface.modes.ntor_vector[i] * phi)
-        return (R,Z), None
-    
-    # The fourier_sum function automatically broadcast arrays. However, we need to ensure that 
-    # we start the scan with a zero object that has the correct final shape. Thus,
-    # we create dummy arrays that have the correct shape.
-    # The phi_bc  is required to ensure the final array phi is stackable with R, Z.
-    s_bc, theta_bc, phi_bc = jnp.broadcast_arrays(s, theta, phi)
-    
-    n_modes = flux_surface.data.Rmnc.shape[1]
-    
-    R,Z = jax.lax.scan(fourier_sum, (jnp.zeros_like(theta_bc), jnp.zeros_like(theta_bc)), jnp.arange(n_modes))[0]
-    
+    _, theta_bc, phi_bc = jnp.broadcast_arrays(s, theta, phi)
+    R, Z = _fourier_rz_scan(flux_surface.data.Rmnc, flux_surface.data.Zmns, flux_surface.modes, jnp.asarray(s), theta_bc, phi_bc)
     return jnp.stack([R, Z, phi_bc],axis=-1)
-    
 
 @eqx.filter_jit
 def _cartesian_position_interpolated(flux_surface : FluxSurfaceBase, s, theta, phi):
@@ -1124,11 +1171,7 @@ def _volume_from_fourier(flux_surface : FluxSurfaceBase, s : float):
     dtheta = 2 * jnp.pi / n_theta
     dphi   = 2 * jnp.pi / flux_surface.nfp  /  n_phi 
 
-    tt, pp = jnp.meshgrid(theta, phi, indexing='ij')
-    
-    surface_normals      = _dx_dphi_cross_dx_dtheta(flux_surface, s, tt, pp)
-
-    r                     = _cartesian_position_interpolated(flux_surface, s, tt, pp)    
+    r, surface_normals   = _grid_position_and_normal(flux_surface, s, theta, phi)
     f_ij = jnp.einsum('...i,...i->...', r, surface_normals)
 
     volume = jnp.sum(f_ij) * dtheta * dphi / 3.0 * flux_surface.nfp 
@@ -1142,7 +1185,7 @@ def _mean_cross_section_area_from_fourier(flux_surface : FluxSurfaceBase, s : fl
 
     A(phi) = closed integral of R dZ/dtheta dtheta, averaged over phi. Both integrals are periodic trapezoid rules (one field period in phi).
     R and dZ/dtheta contain modes up to (mpol, ntor), so the integrand has modes up to (2 mpol, 2 ntor) and the 6 * mode + 1 sampling
-    (as in the volume) is exact to round-off. dZ/dtheta is obtained with forward-mode autodiff.
+    (as in the volume) is exact to round-off. dZ/dtheta is evaluated analytically.
 
     Parameters
     -----------
@@ -1161,17 +1204,8 @@ def _mean_cross_section_area_from_fourier(flux_surface : FluxSurfaceBase, s : fl
 
     theta = jnp.linspace(0, 2 * jnp.pi, n_theta, endpoint=False)
     phi   = jnp.linspace(0, 2 * jnp.pi / flux_surface.nfp, n_phi, endpoint=False)
-    tt, pp = jnp.meshgrid(theta, phi, indexing='ij')
-
-    def rz(th, ph):
-        return _cylindrical_position_interpolated(flux_surface, s, th, ph)[:2]
-
-    def integrand(th, ph):
-        R = rz(th, ph)[0]
-        dZ_dtheta = jax.jacfwd(rz, argnums=0)(th, ph)[1]
-        return R * dZ_dtheta
-
-    f_ij = jax.vmap(jax.vmap(integrand))(tt, pp)
+    R, _, _, _, Z_t, _ = _grid_rz_derivatives(flux_surface, s, theta, phi)
+    f_ij = R * Z_t
     # theta orientation may be reversed (normals pointing inwards): the area itself is positive.
     return jnp.abs(jnp.mean(f_ij) * 2 * jnp.pi)
 
@@ -1227,11 +1261,7 @@ def _volume_from_fourier_half_mod(flux_surface : FluxSurfaceBase, s : float):
     dtheta = 2 * jnp.pi / n_theta
     dphi   = phi[1]- phi[0]
         
-    tt, pp = jnp.meshgrid(theta, phi, indexing='ij')
-    
-    surface_normals        = _dx_dphi_cross_dx_dtheta(flux_surface, s, tt, pp)
-
-    r                      = _cartesian_position_interpolated(flux_surface, s, tt, pp)    
+    r, surface_normals     = _grid_position_and_normal(flux_surface, s, theta, phi)
     f_ij                   = jnp.einsum('...i,...i->...', r, surface_normals)
 
     base_half_mod          = jnp.sum(f_ij) * dtheta * dphi / 3.0 
@@ -1269,8 +1299,7 @@ def _area_from_fourier(flux_surface : FluxSurfaceBase, s : float, oversampling :
     phi   = jnp.linspace(0, 2 * jnp.pi / flux_surface.nfp, n_phi, endpoint=False)
     dtheta = 2 * jnp.pi / n_theta
     dphi   = 2 * jnp.pi / flux_surface.nfp / n_phi
-    tt, pp = jnp.meshgrid(theta, phi, indexing='ij')
-    normals = _dx_dphi_cross_dx_dtheta(flux_surface, s, tt, pp)
+    _, normals = _grid_position_and_normal(flux_surface, s, theta, phi)
     return jnp.sum(jnp.linalg.norm(normals, axis=-1)) * dtheta * dphi * flux_surface.nfp
     
 

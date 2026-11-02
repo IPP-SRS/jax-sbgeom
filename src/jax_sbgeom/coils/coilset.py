@@ -1,4 +1,5 @@
 from .base_coil import Coil
+from jax_sbgeom.jax_utils.utils import tree_take
 from typing import List
 import jax
 import jax.numpy as jnp
@@ -7,6 +8,9 @@ from typing import Type
 from .base_coil import coil_position, coil_tangent, coil_normal, coil_centre, ensure_coil_rotation
 
 from .base_coil import FiniteSizeMethod, FiniteSizeCoil,  _compute_radial_vector, _compute_finite_size_frame, _compute_finite_size, _setup_finitesizemethod_from_coil
+
+def _stack(*xs):
+    return jnp.stack(xs)
 
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
@@ -35,7 +39,7 @@ class CoilSet:
     
     @classmethod
     def from_list(cls, coils : List[Coil]):
-        coils_v = jax.tree.map(lambda *xs : jnp.stack(xs), *coils)
+        coils_v = jax.tree.map(_stack, *coils)
         return cls(coils = coils_v)            
     def centre(self):
         return _coil_centre_vmap(self.coils)
@@ -55,7 +59,7 @@ class CoilSet:
         return _coil_normal_vmap_different_s(self.coils, s)
     
     def __getitem__(self, idx):
-        return jax.tree.map(lambda x: x[idx], self.coils)
+        return tree_take(self.coils, idx)
     
     @property
     def n_coils(self):
@@ -120,7 +124,7 @@ class FiniteSizeCoilSet(CoilSet):
         FiniteSizeCoilSet
             FiniteSizeCoilSet object
         '''
-        coils_v = jax.tree.map(lambda *xs : jnp.stack(xs), *coils)        
+        coils_v = jax.tree.map(_stack, *coils)        
         return cls(coils = coils_v)
     
     @classmethod
@@ -142,7 +146,7 @@ class FiniteSizeCoilSet(CoilSet):
         FiniteSizeCoilSet
             FiniteSizeCoilSet object
         '''
-        coils_v = jax.tree.map(lambda *xs : jnp.stack(xs), *coils)
+        coils_v = jax.tree.map(_stack, *coils)
         finitesizemethod = method.setup_from_coils(coils_v, *args)
         return cls(FiniteSizeCoil(coils_v, method(*finitesizemethod)))
     
@@ -186,7 +190,7 @@ def order_coilset_phi(coilset : CoilSet):
     phis = jnp.arctan2(coilset.centre()[:,1], coilset.centre()[:,0])
     
     permutation = jnp.argsort(phis)
-    new_coils = jax.tree.map(lambda x : jnp.take(x,permutation, axis=0), coilset.coils)
+    new_coils = tree_take(coilset.coils, permutation)
 
     return type(coilset)(coils=new_coils)
     
@@ -211,7 +215,7 @@ def filter_coilset(coilset : CoilSet, mask):
     Returns
         CoilSet           : filtered CoilSet    
     '''
-    return type(coilset)(jax.tree.map(lambda x : x[mask], coilset.coils))
+    return type(coilset)(tree_take(coilset.coils, mask))
 
 def filter_coilset_phi(coilset : CoilSet, phi_min : float, phi_max : float):
     '''
