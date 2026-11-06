@@ -144,8 +144,9 @@ def _delta_ij(sorted_morton_codes : jnp.ndarray, i : int, j : int, int_dtype : j
                      , -1
                      )
 
-def _lmax_condition(state):
-    l, step, idx, d, delta_min, sorted_morton_codes, max_doublings = state
+# The codes are bound with partial, not carried in the loop state: a vmapped while_loop batches its whole state.
+def _lmax_condition(sorted_morton_codes, state):
+    l, step, idx, d, delta_min, max_doublings = state
     return jnp.logical_and(_delta_ij(sorted_morton_codes, idx, idx + d * l) > delta_min, step < max_doublings)
 
 def _lmax_body(state):
@@ -155,19 +156,19 @@ def _lmax_body(state):
 def _binary_search_condition(state):
     return state[0] > 0
 
-def _binary_search_body(state):
-    t, l, idx, d, delta_min, sorted_morton_codes = state
+def _binary_search_body(sorted_morton_codes, state):
+    t, l, idx, d, delta_min = state
     l_carry = jnp.where(_delta_ij(sorted_morton_codes, idx, idx + d * (l+t)) > delta_min, l + t, l)
-    return t // 2, l_carry, idx, d, delta_min, sorted_morton_codes
+    return t // 2, l_carry, idx, d, delta_min
 
 def _split_condition(state):
     return ~state[2] # this continues including the t=1 case just once
 
-def _split_body(state):
-    t, s, _, idx, d, delta_node, sorted_morton_codes = state
+def _split_body(sorted_morton_codes, state):
+    t, s, _, idx, d, delta_node = state
     s_carry = jnp.where(_delta_ij(sorted_morton_codes, idx, idx + d * (s + t)) > delta_node, s + t, s)
     t_carry = (t+1)  // 2
-    return t_carry, s_carry, jnp.equal(t, 1), idx, d, delta_node, sorted_morton_codes
+    return t_carry, s_carry, jnp.equal(t, 1), idx, d, delta_node
 
 def _radix_node(idx, sorted_morton_codes):
     '''Children (left, right) of the internal node idx of the radix tree (Karras 2012).'''
@@ -180,10 +181,10 @@ def _radix_node(idx, sorted_morton_codes):
     delta_min = _delta_ij(sorted_morton_codes, idx, idx - d)
 
     # Exponential search to find upper bound on lmax
-    l_final = jax.lax.while_loop(_lmax_condition, _lmax_body, (l0, 0, idx, d, delta_min, sorted_morton_codes, max_doublings))[0]
+    l_final = jax.lax.while_loop(partial(_lmax_condition, sorted_morton_codes), _lmax_body, (l0, 0, idx, d, delta_min, max_doublings))[0]
 
-    t_final, l_final = jax.lax.while_loop(_binary_search_condition, _binary_search_body,
-                                          (l_final // 2, jnp.astype(0, morton_order_type), idx, d, delta_min, sorted_morton_codes))[:2]
+    t_final, l_final = jax.lax.while_loop(_binary_search_condition, partial(_binary_search_body, sorted_morton_codes),
+                                          (l_final // 2, jnp.astype(0, morton_order_type), idx, d, delta_min))[:2]
 
     j_idx = idx + d * l_final
 
@@ -191,7 +192,7 @@ def _radix_node(idx, sorted_morton_codes):
     delta_node = _delta_ij(sorted_morton_codes, idx, j_idx)
     s0 = jnp.astype(0, morton_order_type)
 
-    s_final = jax.lax.while_loop(_split_condition, _split_body, ((l_final+1) // 2, s0, False, idx, d, delta_node, sorted_morton_codes))[1]
+    s_final = jax.lax.while_loop(_split_condition, partial(_split_body, sorted_morton_codes), ((l_final+1) // 2, s0, False, idx, d, delta_node))[1]
     gamma   = idx + s_final * d + jnp.minimum(d, 0)
 
     left_idx  = jnp.where(jnp.minimum(idx, j_idx) == gamma, gamma, gamma + N)
