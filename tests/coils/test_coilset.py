@@ -118,7 +118,9 @@ def check_finitesize_coilset(coils_jax, frame_class : Type[jsb.coils.base_coil.F
         finite_size_base       = fs_coil.finite_size(s, width_radial, width_phi)
 
         onp.testing.assert_allclose(radial_vector_base, radial_vector_vec[i])
-        onp.testing.assert_allclose(finite_size_frame_base, finite_size_frame_vec[i])
+        # atol: the radial vector is projected perpendicular to the tangent, which leaves rounding noise (~1e-17) where
+        # a component is exactly zero
+        onp.testing.assert_allclose(finite_size_frame_base, finite_size_frame_vec[i], atol=1e-12)
         onp.testing.assert_allclose(finite_size_base, finite_size_vec[i])
 
 

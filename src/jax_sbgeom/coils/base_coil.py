@@ -277,20 +277,25 @@ def _frame_from_radial_vector(tangents, radial_vectors):
     Compute finite size frame from tangent and radial vector.
 
     First finite size direction is radial direction, second is phi direction (perpendicular to both tangent and radial)
-    
+
+    The radial vector is projected onto the plane perpendicular to the (unit) tangent before it is normalised, so the
+    frame is orthonormal at every s, also where the radial vector is interpolated between samples (RadialVectorFrame)
+    or its own tangent differs slightly from the coil tangent.
+
     Parameters
     ----------
     tangents : jnp.ndarray [..., 3]
-        Tangent vector(s) along the coil
+        Unit tangent vector(s) along the coil
     radial_vectors : jnp.ndarray [..., 3]
-        Radial vector(s) along the coil 
+        Radial vector(s) along the coil
 
     Returns
     -------
     jnp.ndarray [..., 2, 3]
         Finite size frame(s) along the coil
     '''
-    e_R_n   = radial_vectors / jnp.linalg.norm(radial_vectors, axis=-1, keepdims=True) # ..., 3
+    radial_perp = radial_vectors - jnp.sum(radial_vectors * tangents, axis=-1, keepdims=True) * tangents # ..., 3
+    e_R_n   = radial_perp / jnp.linalg.norm(radial_perp, axis=-1, keepdims=True) # ..., 3
     e_phi_n = jnp.cross(tangents, e_R_n) # ..., 3
     e_phi_n = e_phi_n / jnp.linalg.norm(e_phi_n, axis=-1, keepdims=True) # ..., 3
     return jnp.stack([e_R_n, e_phi_n], axis=-2) # ..., 2, 3
@@ -658,11 +663,13 @@ def _rmf_radial_vector_from_data(coil_centre, positions, tangents):
     total_ri = jnp.concatenate([initial_result[None, :], result_arr], axis=0)  # (n_samples, 3)
 
     # Add a simple periodic correction to ensure that the start and end vectors are aligned    
-    angle = jnp.arccos(jnp.dot(final_result, initial_result))
+    # (the dot products of unit vectors are clipped: rounding can push them just above 1, which made arccos return NaN
+    # for coils whose frame closes without any twist, e.g. planar coils)
+    angle = jnp.arccos(jnp.clip(jnp.dot(final_result, initial_result), -1.0, 1.0))
 
     tanv0 = _angle_axis_to_matrix(tangents[-1], angle)
 
-    angle_corr       = jnp.where(jnp.arccos(jnp.dot(initial_result, tanv0 @ final_result)) > angle, -angle, angle)
+    angle_corr       = jnp.where(jnp.arccos(jnp.clip(jnp.dot(initial_result, tanv0 @ final_result), -1.0, 1.0)) > angle, -angle, angle)
 
     uniform_rotation = jnp.linspace(0.0, angle_corr, n_samples)
     
