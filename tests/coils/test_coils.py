@@ -387,7 +387,9 @@ def check_reverse_finite_size(finitesize_coil):
     # we need to reverse the tangent vector in the reversed frame to compare
     finitesize_frame_reversed_corrected = finitesize_frame_reversed.at[...,1,:].set(-finitesize_frame_reversed[...,1,:])
 
-    onp.testing.assert_allclose(finitesize_frame_original, finitesize_frame_reversed_corrected)
+    # atol: the radial vector is projected perpendicular to the tangent, which leaves rounding noise (~1e-17) where a
+    # component is exactly zero
+    onp.testing.assert_allclose(finitesize_frame_original, finitesize_frame_reversed_corrected, atol=1e-12)
 
     width_phi = 0.245
     width_radial = 0.123
