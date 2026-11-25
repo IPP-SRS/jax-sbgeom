@@ -185,6 +185,11 @@ class FiniteSizeMethod(eqx.Module):
     '''
     Abstract base class for finite size methods. All finite size method classes should inherit from this class and implement the abstract methods.
 
+    Orientation convention: the radial vector (the first finite size direction) points to the outer side of the
+    coil, away from the coil centre, at least on average along the coil. The second direction is
+    tangent x radial. CentroidFrame satisfies it at every point, RotationMinimizedFrame starts outward and is
+    transported from there, FrenetSerretFrame uses minus the curve normal (outward where the coil is convex).
+    For RadialVectorFrame the caller is responsible for the given radial vectors.
     '''
 
     @classmethod    
@@ -504,8 +509,11 @@ def _compute_radial_vector_frenet_serret(coil : Coil, s : jnp.ndarray):
     '''
     Compute radial vector along the coil as a function of arc length using Frenet-Serret method
     Uses the coils internal method to compute the radial vector (as it may be coil-type specific or not even exist)
+
+    The curve normal points to the centre of curvature, i.e. inward on a convex coil; the radial vector is minus
+    the normal, to follow the outward orientation convention (see FiniteSizeMethod).
     '''
-    return coil.normal(s)
+    return -coil.normal(s)
     
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #                                                                           Radial Vector Frame
@@ -558,12 +566,14 @@ def _interpolate_radial_vectors(radial_vectors_rmf, s):
 class RotationMinimizedFrame(RadialVectorFrame):
     '''
     Finite size method using rotation minimized frame. This is a subclass of RadialVectorFrame.
-    The radial vectors are computed using the rotation minimizing frame algorithm.
+    The radial vectors are computed using the rotation minimizing frame algorithm, starting from the outward
+    direction (away from the coil centre) at s=0, see _rmf_radial_vector_from_data.
     '''
     @classmethod 
     def setup_from_coil(cls, coil : Coil, number_of_rmf_samples : int):
+        _check_rmf_start_is_defined(coil)
         return (_compute_full_rmf(coil, number_of_rmf_samples),)
-    
+
     @classmethod 
     def setup_from_coils(cls, coil : Coil, *args):
         '''
@@ -571,8 +581,35 @@ class RotationMinimizedFrame(RadialVectorFrame):
         This is required because there needs to be a choice made whether the extra arguments are vmapped over or not.
         Some coils, like RotationMinimizedFrame, require a static number, and this cannot be vmapped using the base vmap.
         '''
+        _check_rmf_start_is_defined(coil, batched=True)
         return (_setup_from_coils_rotation_minimized(coil, *args),)
-    
+
+
+def _check_rmf_start_is_defined(coil : Coil, batched : bool = False):
+    '''
+    Raise a ValueError if the outward direction at s=0 (the seed of the rotation minimizing frame) is undefined, i.e.
+    if the vector from the coil centre to the coil at s=0 is (almost) parallel to the tangent. This is done outside of
+    jit, so the user gets a plain Python error. When called with traced values (inside jit/vmap/grad of the caller) the
+    values are not available and the check is skipped.
+    '''
+    def start_data(c):
+        return c.centre(), c.position(0.0), c.tangent(0.0)
+
+    centre, position, tangent = (jax.vmap(start_data)(coil) if batched else start_data(coil))
+    if any(isinstance(x, jax.core.Tracer) for x in (centre, position, tangent)):
+        return
+
+    d_0           = onp.atleast_2d(onp.asarray(position) - onp.asarray(centre))
+    t_0           = onp.atleast_2d(onp.asarray(tangent))
+    outward_norm  = onp.linalg.norm(d_0 - onp.sum(d_0 * t_0, axis=-1, keepdims=True) * t_0, axis=-1)
+    degenerate    = outward_norm < 1e-3 * onp.linalg.norm(d_0, axis=-1)
+    if degenerate.any():
+        which = f" (coil index {onp.flatnonzero(degenerate).tolist()})" if batched else ""
+        raise ValueError(
+            f"RotationMinimizedFrame: cannot determine the starting radial vector{which}. At s=0 the direction from the "
+            "coil centre to the coil is (almost) parallel to the coil tangent, so the outward direction normal to the "
+            "tangent is undefined. Move the start of the coil (s=0) to a point where this is not the case and try again.")
+
 
 @partial(jax.jit, static_argnums=(1,))
 def _compute_full_rmf(coil : Coil, number_of_rmf_samples : int):
@@ -614,6 +651,12 @@ def _rmf_radial_vector_from_data(coil_centre, positions, tangents):
     We assume that the positions and tangents are given at uniform arc length intervals (endpoint not included).
     In other words, sampled at jnp.linspace(0.0, 1.0, n_samples, endpoint=False).
 
+    The initial radial vector is the outward direction at s=0: the vector from the coil centre to the first
+    position, projected onto the plane normal to the tangent (as in CentroidFrame). This follows the orientation
+    convention of FiniteSizeMethod. The transport keeps the angle to that start, so on a non-planar coil the radial
+    vector can turn away from the local outward direction; it stays outward on average for moderately non-planar
+    coils.
+
     See [1] for computation details.
 
     References
@@ -636,9 +679,18 @@ def _rmf_radial_vector_from_data(coil_centre, positions, tangents):
     '''
     n_samples = positions.shape[0]    
     
-    initial_vec = jnp.cross(tangents[0], positions[0] - coil_centre)
+    # outward direction at s=0 (orientation convention, see FiniteSizeMethod); formerly the toroidal direction
+    # cross(tangent, position - centre)
+    initial_result = _radial_vector_centroid_from_data(coil_centre, positions[0], tangents[0])
 
-    initial_result = initial_vec / jnp.linalg.norm(initial_vec)
+    # NaN if centre -> position is parallel to the tangent. Normally caught before jit with a longer message in
+    # _check_rmf_start_is_defined; this is the fallback when that check was skipped because the inputs were traced.
+    d_0          = positions[0] - coil_centre
+    outward_norm = jnp.linalg.norm(d_0 - jnp.dot(d_0, tangents[0]) * tangents[0])
+    initial_result = eqx.error_if(
+        initial_result, outward_norm < 1e-3 * jnp.linalg.norm(d_0),
+        "RotationMinimizedFrame: cannot determine the starting radial vector. Outward direction is (almost) parallel "
+        "to tangent. Try different coil position.")
 
     def rmf_step(carry, x):
         result_prev   = carry # need this at the end
@@ -662,17 +714,18 @@ def _rmf_radial_vector_from_data(coil_centre, positions, tangents):
 
     total_ri = jnp.concatenate([initial_result[None, :], result_arr], axis=0)  # (n_samples, 3)
 
-    # Add a simple periodic correction to ensure that the start and end vectors are aligned    
-    # (the dot products of unit vectors are clipped: rounding can push them just above 1, which made arccos return NaN
-    # for coils whose frame closes without any twist, e.g. planar coils)
-    angle = jnp.arccos(jnp.clip(jnp.dot(final_result, initial_result), -1.0, 1.0))
+    # Periodic correction: transport the last vector over the closing segment (last sample -> first sample), measure
+    # the signed angle about tangents[0] that maps it onto the initial vector (the holonomy of the closed curve), and
+    # distribute that rotation linearly over the samples (sample i gets i / n_samples of it, so that the closing
+    # sample n_samples would get all of it). Formerly the vector at the last sample was compared with the first one
+    # directly, which skips the closing segment: for an outward start on a planar coil it added a false twist of
+    # 2*pi / n_samples.
+    closed_result, _ = rmf_step(final_result, (positions[-1], positions[0], tangents[-1], tangents[0]))
+    angle_corr = jnp.arctan2(jnp.dot(jnp.cross(closed_result, initial_result), tangents[0]),
+                             jnp.dot(closed_result, initial_result))
 
-    tanv0 = _angle_axis_to_matrix(tangents[-1], angle)
+    uniform_rotation = angle_corr * jnp.arange(n_samples) / n_samples
 
-    angle_corr       = jnp.where(jnp.arccos(jnp.clip(jnp.dot(initial_result, tanv0 @ final_result), -1.0, 1.0)) > angle, -angle, angle)
-
-    uniform_rotation = jnp.linspace(0.0, angle_corr, n_samples)
-    
     angle_axis_matrices = _angle_axis_to_matrix_vmap(tangents, uniform_rotation)
 
     result_new = jnp.einsum("...ij,...j->...i", angle_axis_matrices, total_ri)
